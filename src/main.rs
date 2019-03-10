@@ -1,3 +1,8 @@
+mod interp;
+
 fn main() {
-    println!("Hello, world!");
+    println!("rusttalk");
+
+    let interp = interp::Interpreter::new(vec![0; 24]);
+    interp.run();
 }
