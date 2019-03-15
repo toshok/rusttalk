@@ -1,14 +1,21 @@
-type OOP = usize;
+use om::OOP;
+use process::{ACTIVE_PROCESS, SUSPENDED_CTX};
+use std_ptrs::{NIL_PTR, TRUE_PTR, FALSE_PTR, SCHED_ASS_PTR, MINUS_ONE_PTR, ZERO_PTR, ONE_PTR, TWO_PTR};
 
 static VALUE: u8 = 1;
 
-static NIL_PTR: OOP = 0;
-static TRUE_PTR: OOP = 1;
-static FALSE_PTR: OOP = 2;
-static MINUS_ONE_PTR: OOP = 3;
-static ZERO_PTR: OOP = 4;
-static ONE_PTR: OOP = 5;
-static TWO_PTR: OOP = 6;
+// built-in selector?
+static MUST_BE_BOOLEAN: OOP = 7;
+
+struct Context {
+    fsender_caller: OOP,
+    finstr_ptr: OOP,
+    fstack_ptr: OOP,
+    fmethod_block_argc: OOP,
+    finit_ip: OOP,
+    freceiver_home: OOP,
+    ftemp_frame: [OOP; 32],
+}
 
 pub struct Interpreter {
     image: Vec<u8>,
@@ -20,44 +27,12 @@ pub struct Interpreter {
     receiver: OOP,
     method: OOP,
     msg_selector: OOP,
+    arg_count: usize,
     new_method: OOP,
 
     //
     stack: Vec<OOP>,
 }
-
-    /*
-        esLit, eseLit, eSsLit, eSseLit,    
-                popST, dupST,
-        pushActCtx,
-        BCFault, BCFault, BCFault, BCFault, BCFault, BCFault,
-        SUJump, SUJump, SUJump, SUJump, SUJump, SUJump, SUJump, SUJump,
-        pJumpFalse, pJumpFalse, pJumpFalse, pJumpFalse,
-        pJumpFalse, pJumpFalse, pJumpFalse, pJumpFalse,
-        eJump, eJump, eJump, eJump, eJump, eJump, eJump, eJump,
-        eJumpTrue, eJumpTrue, eJumpTrue, eJumpTrue,
-        eJumpFalse, eJumpFalse, eJumpFalse, eJumpFalse,
-        sArithMsg, sArithMsg, sArithMsg, sArithMsg,
-        sArithMsg, sArithMsg, sArithMsg, sArithMsg,
-        sArithMsg, sArithMsg, sArithMsg, sArithMsg,
-        sArithMsg, sArithMsg, sArithMsg, sArithMsg,
-        sCommonMsg, sCommonMsg, sCommonMsg, sCommonMsg,
-        sCommonMsg, sCommonMsg, sCommonMsg, sCommonMsg,
-        sCommonMsg, sCommonMsg, sCommonMsg, sCommonMsg,
-        sCommonMsg, sCommonMsg, sCommonMsg, sCommonMsg,
-        sLit0Args, sLit0Args, sLit0Args, sLit0Args,
-        sLit0Args, sLit0Args, sLit0Args, sLit0Args,
-        sLit0Args, sLit0Args, sLit0Args, sLit0Args,
-        sLit0Args, sLit0Args, sLit0Args, sLit0Args,
-        sLit1Arg, sLit1Arg, sLit1Arg, sLit1Arg,
-                sLit1Arg, sLit1Arg, sLit1Arg, sLit1Arg,
-        sLit1Arg, sLit1Arg, sLit1Arg, sLit1Arg,
-        sLit1Arg, sLit1Arg, sLit1Arg, sLit1Arg,
-        sLit2Args, sLit2Args, sLit2Args, sLit2Args,
-        sLit2Args, sLit2Args, sLit2Args, sLit2Args,
-        sLit2Args, sLit2Args, sLit2Args, sLit2Args,
-        sLit2Args, sLit2Args, sLit2Args, sLit2Args
-        */
 
 impl Interpreter {
     pub fn new(image: Vec<u8>) -> Interpreter {
@@ -69,12 +44,19 @@ impl Interpreter {
             receiver: 0,
             method: 0,
             msg_selector: 0,
+            arg_count: 0,
             new_method: 0,
             stack: vec![],
         }
     }
 
+//    fn fetch_ctx_regs 
+
     pub fn run(&mut self) {
+        self.active_context = self.process_first_context();
+        // cacheActiveContext
+        // fetchCtxRegs
+
         loop {
             let bytecode = self.next_byte();
 
@@ -86,18 +68,18 @@ impl Interpreter {
                 96...103 => self.pop_and_store_receiver_var(bytecode),
                 104...111 => self.pop_and_store_temp_var(bytecode),
                 112 => self.push_receiver(),
-                113 => self.push(TRUE_PTR),
-                114 => self.push(FALSE_PTR),
-                115 => self.push(NIL_PTR),
-                116 => self.push(MINUS_ONE_PTR),
-                117 => self.push(ZERO_PTR),
-                118 => self.push(ONE_PTR),
-                119 => self.push(TWO_PTR),
+                113 => self.push_const(TRUE_PTR),
+                114 => self.push_const(FALSE_PTR),
+                115 => self.push_const(NIL_PTR),
+                116 => self.push_const(MINUS_ONE_PTR),
+                117 => self.push_const(ZERO_PTR),
+                118 => self.push_const(ONE_PTR),
+                119 => self.push_const(TWO_PTR),
                 // why are these next 4 duplicated?
                 120 => self.push_receiver(),
-                121 => self.push(TRUE_PTR),
-                122 => self.push(FALSE_PTR),
-                123 => self.push(NIL_PTR),
+                121 => self.push_const(TRUE_PTR),
+                122 => self.push_const(FALSE_PTR),
+                123 => self.push_const(NIL_PTR),
                 124 => self.return_stack_top_from_message(),
                 125 => self.return_stack_top_from_block(),
                 126...127 => panic!("illegal bytecode"),
@@ -113,12 +95,12 @@ impl Interpreter {
                 137 => self.push_active_context(),
                 138...143 => panic!("illegal bytecode"),
                 144...151 => self.short_unconditional_jump(bytecode),
-        // 152...159 => pJumpFalse
-        // 160...167 => eJump
-        // 168...171 => eJumpTrue
-        // 172...175 => eJumpFalse
-        // 176...191 => sArithMsg
-        // 192...207 => sCommonMsg
+                152...159 => self.jump_if_false(bytecode),
+                160...167 => self.extended_unconditional_jump(bytecode),
+                168...171 => self.extended_jump_on_true(bytecode),
+                172...175 => self.extended_jump_on_false(bytecode),
+                176...191 => panic!("arithmetic special ops not implemented"), //sArithMsg
+                192...207 => panic!("special ops not implemented"), //sCommonMsg
                 208...223 => self.send_literal_with_argc(bytecode, 0),
                 224...239 => self.send_literal_with_argc(bytecode, 1),
                 240...255 => self.send_literal_with_argc(bytecode, 2),
@@ -131,6 +113,10 @@ impl Interpreter {
     fn push_receiver(&mut self) {
         let oop = self.receiver;
         self.push(oop);
+    }
+
+    fn push_const(&mut self, val: OOP) {
+        self.push(val)
     }
 
     fn push_receiver_var(&mut self, bytecode: u8) {
@@ -246,6 +232,26 @@ impl Interpreter {
         self.jump(((bytecode & 7) + 1) as usize);
     }
 
+    fn jump_if_false(&mut self, bytecode: u8) {
+        self.jumplf(FALSE_PTR, TRUE_PTR, ((bytecode & 7) + 1) as usize);
+    }
+
+    fn extended_unconditional_jump(&mut self, bytecode: u8) {
+        let next = self.next_byte() as usize;
+        let offset = 256 * (((bytecode as usize) & 7) - 4) + next;
+        self.jump(offset);
+    }
+
+    fn extended_jump_on_true(&mut self, bytecode: u8) {
+        let next = self.next_byte() as usize;
+        self.jumplf(TRUE_PTR, FALSE_PTR, 256*((bytecode as usize)&3) + next);
+    }
+
+    fn extended_jump_on_false(&mut self, bytecode: u8) {
+        let next = self.next_byte() as usize;
+        self.jumplf(FALSE_PTR, TRUE_PTR, 256*((bytecode as usize)&3) + next);
+    }
+
     // primitives
     fn next_byte(&mut self) -> u8 {
         let byte = self.image[self.ip];
@@ -255,6 +261,24 @@ impl Interpreter {
 
     fn jump(&mut self, offset: usize) {
         self.ip += offset;
+    }
+
+    /* assume that cond is one of TRUE_PTR, FALSE_PTR, and notcond is its inverse */
+    // XXX(toshok) that's a terrible assumption.  why?
+    fn jumplf(&mut self, cond: OOP, notcond: OOP, offset: usize) {
+        let bool_val = self.stack_top();
+        if bool_val == cond {
+            // true branch
+            self.pop();
+            self.jump(offset);
+        } else if bool_val != notcond {
+            // error branch
+            self.send_selector(MUST_BE_BOOLEAN, 0);
+        } else {
+            // false branch
+            self.pop();
+            // execution continues from next ip
+        }
     }
 
     fn push(&mut self, obj: OOP) {
@@ -267,6 +291,10 @@ impl Interpreter {
 
     fn stack_top(&mut self) -> OOP {
         *self.stack.last().unwrap()
+    }
+
+    fn stack_val(&mut self, offset: usize) -> OOP {
+        *self.stack.get(self.stack.len()-offset-1).unwrap()
     }
 
     fn fetch_ptr(&self, _offset: u8, _obj: OOP) -> OOP {
@@ -285,7 +313,25 @@ impl Interpreter {
         0 // not-implemented
     }
 
-    fn send_selector(&mut self, _selector: OOP, _argc: u8) {
+    fn send_selector(&mut self, selector: OOP, argc: u8) {
+        let new_receiver = self.stack_val(argc as usize);
+
+        self.msg_selector = selector;
+        self.arg_count = argc as usize;
+
+        /*
+        let cls = self.fetch_class(new_receiver);
+
+        self.send_selector_to_class(cls);
+        */
+
         // not-implemented
+    }
+
+    /// process stuff that should live in process.rs
+    fn process_first_context(&mut self) -> OOP {
+        let scheduler = self.fetch_ptr(VALUE, SCHED_ASS_PTR);
+        let active_process = self.fetch_ptr(ACTIVE_PROCESS, scheduler);
+        self.fetch_ptr(SUSPENDED_CTX, active_process)
     }
 }
