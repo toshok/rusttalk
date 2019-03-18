@@ -21,5 +21,5 @@ fn main() {
     let mut om = om::OM::new();
     let image = snapshot::load("st80.image", &mut om);
     let mut interp = interp::Interpreter::new(&mut om);
-    interp.run();
+    interp.startup();
 }

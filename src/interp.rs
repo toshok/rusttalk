@@ -137,11 +137,15 @@ impl<'a> Interpreter<'a> {
 
 //    fn fetch_ctx_regs 
 
-    pub fn run(&mut self) {
+    pub fn startup(&mut self) {
         self.active_context = self.process_first_context();
         // cacheActiveContext
         // fetchCtxRegs
 
+        self.run()
+    }
+
+    fn run(&mut self) {
         loop {
             let bytecode = self.next_byte();
 
@@ -392,12 +396,12 @@ impl<'a> Interpreter<'a> {
         *self.stack.get(self.stack.len()-offset-1).unwrap()
     }
 
-    fn fetch_ptr(&self, _offset: u8, _obj: OOP) -> OOP {
-        0 // not-implemented
+    fn fetch_ptr(&self, offset: u8, obj: OOP) -> OOP {
+        self.om.fetch_ptr(offset as isize, obj)
     }
 
-    fn store_ptr(&self, _offset: u8, _obj: OOP, _value: OOP) {
-        // not-implemented
+    fn store_ptr(&self, offset: u8, obj: OOP, value: OOP) {
+        self.om.store_ptr(offset as isize, obj, value)
     }
 
     fn temp(&self, _temp_offset: u8) -> OOP {

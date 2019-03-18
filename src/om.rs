@@ -16,7 +16,7 @@ const HEAP_SPACE_STOP: usize = OM_SIZE - 1;     /* G/R p.658 */
 
 #[derive(Copy, Clone)]
 pub enum Loc {
-//notyet    Address { addr: ADDR },
+    Address { addr: *mut u32 },
     Index { index: usize },
 //notyet    Bitmap { bmap: BITMAP },
 }
@@ -33,11 +33,11 @@ const REST_PTRS: u8 = 2;
 const REST_FREE: u8 = 4;
 
 pub struct OM {
-    otLoc:   [Loc;       OT_SIZE],
-    otRest:  [u8;        OT_SIZE], /* bitmap, free, ptr and odd bits */
-    otCount: [u8;        OT_SIZE], /* reference counts */
-    sizes:   [SizeField; OT_SIZE], /* sizes of the object bodies */
-    classes: [OOP;       OT_SIZE], /* classes of the objects */
+    ot_loc:   [Loc;       OT_SIZE],
+    ot_rest:  [u8;        OT_SIZE], /* bitmap, free, ptr and odd bits */
+    ot_count: [u8;        OT_SIZE], /* reference counts */
+    sizes:    [SizeField; OT_SIZE], /* sizes of the object bodies */
+    classes:  [OOP;       OT_SIZE], /* classes of the objects */
 
 //OOP     FCLhd[BIG_SIZE + 1];        /* initialise to NON_PTR */
 
@@ -48,9 +48,9 @@ pub struct OM {
 impl OM {
     pub fn new() -> OM {
         OM{
-            otLoc:   [Loc::Index{index: 0}; OT_SIZE],
-            otRest:  [0; OT_SIZE],
-            otCount: [0; OT_SIZE],
+            ot_loc:   [Loc::Index{index: 0}; OT_SIZE],
+            ot_rest:  [0; OT_SIZE],
+            ot_count: [0; OT_SIZE],
             sizes:   [0; OT_SIZE],
             classes: [NIL_PTR; OT_SIZE],
 
@@ -59,8 +59,22 @@ impl OM {
         }
     }
 
+    pub fn location_addr(&self, oop: OOP) -> *mut u32 {
+        match self.ot_loc[oop as usize] {
+            Loc::Address { addr } => addr,
+            _ => panic!("location not an address")
+        }
+    }
+
+    pub fn location_index(&self, oop: OOP) -> usize {
+        match self.ot_loc[oop as usize] {
+            Loc::Index { index } => index,
+            _ => panic!("location not an address")
+        }
+    }
+
     pub fn is_free(&self, oop: OOP) -> bool {
-        (self.otRest[oop as usize]&REST_FREE) != 0
+        (self.ot_rest[oop as usize] & REST_FREE) != 0
     }
 
     pub fn class(&self, oop: OOP) -> OOP {
@@ -85,7 +99,7 @@ impl OM {
     }
 
     pub fn free_list_prepend(&mut self, oop: OOP) {
-        self.otLoc[oop as usize] = Loc::Index{index: oop as usize};
+        self.ot_loc[oop as usize] = Loc::Index{index: oop as usize};
         self.free_ptr = oop;
     }
 
@@ -101,11 +115,11 @@ impl OM {
 
     // methods exposed for snapshot loading
     pub fn set_ot_count(&mut self, oop: OOP, count: u8) {
-        self.otCount[oop as usize] = count;
+        self.ot_count[oop as usize] = count;
     }
 
     pub fn set_ot_rest(&mut self, oop: OOP, rest: u8) {
-        self.otRest[oop as usize] = rest;
+        self.ot_rest[oop as usize] = rest;
     }
 
     pub fn set_ot_size(&mut self, oop: OOP, size: i32) {
@@ -114,6 +128,20 @@ impl OM {
 
     pub fn set_ot_class(&mut self, oop: OOP, cls: OOP) {
         self.classes[oop as usize] = cls;
+    }
+
+    pub fn fetch_ptr(&self, i: isize, oop: OOP) -> OOP {
+        unsafe {
+            let ptr = self.location_addr(oop).offset(i);
+            *ptr as OOP
+        }
+    }
+
+    pub fn store_ptr(&self, i: isize, oop: OOP, value: OOP) {
+        unsafe {
+            let ptr = self.location_addr(oop).offset(i);
+            *ptr = value as u32;
+        }
     }
 }
 
