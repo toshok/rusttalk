@@ -1,7 +1,7 @@
 use std::error::Error;
-use std::path::Path;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Seek, SeekFrom};
+use std::path::Path;
 
 use om::{OM, OOP};
 
@@ -44,30 +44,36 @@ fn load_manchester(mut file: File, om: &mut OM, object_space_length: usize, obje
     file.seek(SeekFrom::Start(512));
 
     print!("Loading object space... ");
-    let mut object_space = vec![0u8; object_space_length];
-    file.read_exact(&mut object_space);
+
+    let mut object_space = vec![0u32; object_space_length];
+    for i in 0..object_space_length {
+        object_space[i] = file.read_u32::<BigEndian>().unwrap();
+    }
     println!("done");
 
-    let tell = file.seek(SeekFrom::Current(0)).unwrap();
-    file.seek(SeekFrom::Start(tell & !511)).unwrap();
+    let mut tell = file.seek(SeekFrom::Current(0)).unwrap();
+    file.seek(SeekFrom::Start((tell + 511) & !511)).unwrap();
+    tell = file.seek(SeekFrom::Current(0)).unwrap();
 
-    print!("Loading object table... ");
+    println!("Loading object table from offset {}... ", tell);
     let mut offsets = vec![0i32; object_table_length];
 
-    for o in 0..(object_table_length-1) {
+    for o in 0..object_table_length {
         offsets[o] = file.read_i32::<BigEndian>().unwrap();
     }
-    for o in 0..(object_table_length-1) {
+    for o in 0..object_table_length {
         om.set_ot_count(o as OOP, file.read_u8().unwrap());
     }
-    for o in 0..(object_table_length-1) {
+    for o in 0..object_table_length {
         om.set_ot_rest(o as OOP, file.read_u8().unwrap());
     }
-    for o in 0..(object_table_length-1) {
+    for o in 0..object_table_length {
         om.set_ot_size(o as OOP, file.read_i32::<BigEndian>().unwrap());
     }
 
-    for o in 0..(object_table_length-1) {
+    om.initialize_object_space(&mut object_space, offsets);
+
+    for o in 0..object_table_length {
         om.set_ot_class(o as OOP, file.read_u32::<BigEndian>().unwrap() as OOP)
     }
     println!("done");

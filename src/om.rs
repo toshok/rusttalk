@@ -1,3 +1,4 @@
+use std::mem;
 use std_ptrs::NIL_PTR;
 
 // these are compile-time defines in st80:
@@ -31,8 +32,11 @@ enum Size_fld {
 
 const REST_PTRS: u8 = 2;
 const REST_FREE: u8 = 4;
+const REST_BITMAP: u8 = 8;
 
 pub struct OM {
+    object_space: *mut u32,
+
     ot_loc:   [Loc;       OT_SIZE],
     ot_rest:  [u8;        OT_SIZE], /* bitmap, free, ptr and odd bits */
     ot_count: [u8;        OT_SIZE], /* reference counts */
@@ -48,8 +52,9 @@ pub struct OM {
 impl OM {
     pub fn new() -> OM {
         OM{
+            object_space: vec![0u32;1].as_mut_ptr(),
             ot_loc:   [Loc::Index{index: 0}; OT_SIZE],
-            ot_rest:  [0; OT_SIZE],
+            ot_rest:  [REST_FREE; OT_SIZE],
             ot_count: [0; OT_SIZE],
             sizes:   [0; OT_SIZE],
             classes: [NIL_PTR; OT_SIZE],
@@ -75,6 +80,10 @@ impl OM {
 
     pub fn is_free(&self, oop: OOP) -> bool {
         (self.ot_rest[oop as usize] & REST_FREE) != 0
+    }
+
+    pub fn is_bitmap(&self, oop: OOP) -> bool {
+        (self.ot_rest[oop as usize] & REST_BITMAP) != 0
     }
 
     pub fn class(&self, oop: OOP) -> OOP {
@@ -103,6 +112,37 @@ impl OM {
         self.free_ptr = oop;
     }
 
+    pub fn initialize_object_space(&mut self, object_space: &mut Vec<u32>, offsets: Vec<i32>) {
+        self.object_space = object_space.as_mut_ptr();
+
+        unsafe{
+            println!("object space initialized to {:p}-{:p}", self.object_space, self.object_space.offset(object_space.len() as isize));
+        }
+
+        mem::forget(object_space);
+        for_every_oop(|oop| {
+            // st code code has:
+            // if (!isFree(oop)) {
+            //     if (bitmap(oop)) {
+            //             loctni(oop)= offsets[oop];
+            //     } else {
+            //             loctn(oop)= om + offsets[oop];
+            //     }
+            // }
+            if self.is_free(oop) {
+                return
+            }
+            if self.is_bitmap(oop) {
+                self.ot_loc[oop as usize] = Loc::Index{index: offsets[oop as usize] as usize};
+                return;
+            }
+            unsafe {
+//                println!("initializing object at offset {} to loc {:p}", oop, self.object_space.offset(offsets[oop as usize] as isize));
+                self.ot_loc[oop as usize] = Loc::Address{addr: self.object_space.offset(offsets[oop as usize] as isize)};
+            }
+        });
+    }
+
     pub fn initialize_free_list(&mut self) {
         self.free_ptr = NON_PTR;
         for_every_oop_reverse(|oop| {
@@ -115,24 +155,29 @@ impl OM {
 
     // methods exposed for snapshot loading
     pub fn set_ot_count(&mut self, oop: OOP, count: u8) {
+//        println!("setting count for oop {} to {}", oop, count);
         self.ot_count[oop as usize] = count;
     }
 
     pub fn set_ot_rest(&mut self, oop: OOP, rest: u8) {
+//        println!("setting rest for oop {} to {}", oop, rest);
         self.ot_rest[oop as usize] = rest;
     }
 
     pub fn set_ot_size(&mut self, oop: OOP, size: i32) {
+//        println!("setting size for oop {} to {}", oop, size);
         self.sizes[oop as usize] = size;
     }
 
     pub fn set_ot_class(&mut self, oop: OOP, cls: OOP) {
+//        println!("setting class for oop {} to {}", oop, cls);
         self.classes[oop as usize] = cls;
     }
 
     pub fn fetch_ptr(&self, i: isize, oop: OOP) -> OOP {
         unsafe {
             let ptr = self.location_addr(oop).offset(i);
+            println!("fetch_ptr(oop_ptr={:p}, offset={}, ptr={:p}) -> {}", self.location_addr(oop), i, ptr, *ptr as OOP);
             *ptr as OOP
         }
     }
@@ -142,6 +187,18 @@ impl OM {
             let ptr = self.location_addr(oop).offset(i);
             *ptr = value as u32;
         }
+    }
+
+    pub unsafe fn addr_of_oop(&self, oop: OOP) -> *mut u32 {
+        self.location_addr(oop)
+    }
+
+    pub fn dump_oop(&self, oop: OOP) {
+        println!("dumping object {}", oop as usize);
+        println!("class: {}", self.classes[oop as usize]);
+        println!("size: {}", self.sizes[oop as usize]);
+        println!("rest: {}", self.ot_rest[oop as usize]);
+        println!("count: {}", self.ot_count[oop as usize]);
     }
 }
 

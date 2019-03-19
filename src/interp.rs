@@ -1,23 +1,15 @@
+use std::mem;
 use om::{OM, OOP};
 use prim_table::{INT_MESSAGES, PRIMITIVE_DISPATCH};
 use process::{ACTIVE_PROCESS, SUSPENDED_CTX};
 use std_ptrs::{NIL_PTR, TRUE_PTR, FALSE_PTR, SCHED_ASS_PTR, MINUS_ONE_PTR, ZERO_PTR, ONE_PTR, TWO_PTR};
 use mcache::{MethodCacheEntry, CACHE_SIZE};
+use context::Context;
 
 static VALUE: u8 = 1;
 
 // built-in selector?
 static MUST_BE_BOOLEAN: OOP = 7;
-
-struct Context {
-    fsender_caller: OOP,
-    finstr_ptr: OOP,
-    fstack_ptr: OOP,
-    fmethod_block_argc: OOP,
-    finit_ip: OOP,
-    freceiver_home: OOP,
-    ftemp_frame: [OOP; 32],
-}
 
 pub struct Interpreter<'a> {
     pub om: &'a OM,
@@ -139,7 +131,17 @@ impl<'a> Interpreter<'a> {
 
     pub fn startup(&mut self) {
         self.active_context = self.process_first_context();
-        // cacheActiveContext
+        
+        let ac: &Context = unsafe { mem::transmute(self.om.addr_of_oop(self.active_context)) };
+
+        println!("caller: {}", ac.FSENDER_CALLER);
+        println!("instr_ptr: {}", ac.FINSTR_PTR);
+        println!("stack_ptr: {}", ac.FSTACK_PTR);
+        println!("init_ip: {}", ac.FINIT_IP);
+        println!("receiver: {}", ac.FRECEIVER_HOME);
+
+        panic!("done");
+
         // fetchCtxRegs
 
         self.run()
@@ -397,6 +399,7 @@ impl<'a> Interpreter<'a> {
     }
 
     fn fetch_ptr(&self, offset: u8, obj: OOP) -> OOP {
+        println!("interp.fetch_ptr(offset={}, obj={})", offset, obj);
         self.om.fetch_ptr(offset as isize, obj)
     }
 
@@ -429,6 +432,7 @@ impl<'a> Interpreter<'a> {
 
     /// process stuff that should live in process.rs
     fn process_first_context(&mut self) -> OOP {
+        self.om.dump_oop(SCHED_ASS_PTR);
         let scheduler = self.fetch_ptr(VALUE, SCHED_ASS_PTR);
         let active_process = self.fetch_ptr(ACTIVE_PROCESS, scheduler);
         self.fetch_ptr(SUSPENDED_CTX, active_process)

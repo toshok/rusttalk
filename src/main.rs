@@ -1,5 +1,6 @@
 mod array_store_prim;
 mod char_scan_prim;
+mod context;
 mod control_prim;
 mod int_prim;
 mod io_prim;
