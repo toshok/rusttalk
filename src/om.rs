@@ -35,7 +35,7 @@ const REST_FREE: u8 = 4;
 const REST_BITMAP: u8 = 8;
 
 pub struct OM {
-    object_space: *mut u32,
+    object_space: *mut OOP,
 
     ot_loc:   [Loc;       OT_SIZE],
     ot_rest:  [u8;        OT_SIZE], /* bitmap, free, ptr and odd bits */
@@ -52,7 +52,7 @@ pub struct OM {
 impl OM {
     pub fn new() -> OM {
         OM{
-            object_space: vec![0u32;1].as_mut_ptr(),
+            object_space: vec![0;1].as_mut_ptr(),
             ot_loc:   [Loc::Index{index: 0}; OT_SIZE],
             ot_rest:  [REST_FREE; OT_SIZE],
             ot_count: [0; OT_SIZE],
@@ -64,7 +64,7 @@ impl OM {
         }
     }
 
-    pub fn location_addr(&self, oop: OOP) -> *mut u32 {
+    pub fn location_addr(&self, oop: OOP) -> *mut OOP {
         match self.ot_loc[oop as usize] {
             Loc::Address { addr } => addr,
             _ => panic!("location not an address")
@@ -88,14 +88,6 @@ impl OM {
 
     pub fn class(&self, oop: OOP) -> OOP {
         return self.classes[oop as usize]
-    }
-
-    pub fn is_int(&self, oop: OOP) -> bool {
-        (oop & 0x80000000) != 0
-    }
-
-    pub fn int_val(&self, oop: OOP) -> i32 {
-        ((oop<<1) as i32) >> 1
     }
 
     // the type of this function is wrong..
@@ -177,19 +169,19 @@ impl OM {
     pub fn fetch_ptr(&self, i: isize, oop: OOP) -> OOP {
         unsafe {
             let ptr = self.location_addr(oop).offset(i);
-            println!("fetch_ptr(oop_ptr={:p}, offset={}, ptr={:p}) -> {}", self.location_addr(oop), i, ptr, *ptr as OOP);
-            *ptr as OOP
+            println!("fetch_ptr(oop_ptr={:p}, offset={}, ptr={:p}) -> {}", self.location_addr(oop), i, ptr, *ptr);
+            *ptr
         }
     }
 
     pub fn store_ptr(&self, i: isize, oop: OOP, value: OOP) {
         unsafe {
             let ptr = self.location_addr(oop).offset(i);
-            *ptr = value as u32;
+            *ptr = value;
         }
     }
 
-    pub unsafe fn addr_of_oop(&self, oop: OOP) -> *mut u32 {
+    pub unsafe fn addr_of_oop(&self, oop: OOP) -> *mut OOP {
         self.location_addr(oop)
     }
 
@@ -202,14 +194,24 @@ impl OM {
     }
 }
 
-    pub fn for_every_oop_reverse<F>(mut every_fn: F) where F: FnMut(OOP) {
-        for oop in LAST_OOP..=FIRST_OOP {
-            every_fn(oop as OOP);
-        }
-    }
+pub fn is_int(oop: OOP) -> bool {
+    (oop & 0x80000000) != 0
+}
 
-    pub fn for_every_oop<F>(mut every_fn: F) where F: FnMut(OOP) {
-        for oop in FIRST_OOP..=LAST_OOP {
-            every_fn(oop as OOP);
-        }
+pub fn int_val(oop: OOP) -> i32 {
+    ((oop<<1) as i32) >> 1
+}
+
+
+
+pub fn for_every_oop_reverse<F>(mut every_fn: F) where F: FnMut(OOP) {
+    for oop in LAST_OOP..=FIRST_OOP {
+        every_fn(oop as OOP);
     }
+}
+
+pub fn for_every_oop<F>(mut every_fn: F) where F: FnMut(OOP) {
+    for oop in FIRST_OOP..=LAST_OOP {
+        every_fn(oop as OOP);
+    }
+}

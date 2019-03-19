@@ -1,5 +1,6 @@
 use std::mem;
-use om::{OM, OOP};
+use context;
+use om::{OM, OOP, int_val};
 use prim_table::{INT_MESSAGES, PRIMITIVE_DISPATCH};
 use process::{ACTIVE_PROCESS, SUSPENDED_CTX};
 use std_ptrs::{NIL_PTR, TRUE_PTR, FALSE_PTR, SCHED_ASS_PTR, MINUS_ONE_PTR, ZERO_PTR, ONE_PTR, TWO_PTR};
@@ -13,7 +14,8 @@ static MUST_BE_BOOLEAN: OOP = 7;
 
 pub struct Interpreter<'a> {
     pub om: &'a OM,
-    ip: usize,
+    ip: *const u8,
+    sp: *mut OOP,
 
     // "registers" in the smalltalk formal spec
     active_context: OOP,
@@ -26,7 +28,6 @@ pub struct Interpreter<'a> {
     prim_index: u8,
 
     //
-    stack: Vec<OOP>,
     pub mcache: Vec<MethodCacheEntry>,
 }
 
@@ -106,7 +107,8 @@ impl<'a> Interpreter<'a> {
     pub fn new(om: &OM) -> Interpreter {
         Interpreter {
             om,
-            ip: 0,
+            ip: vec![0;1].as_mut_ptr(),
+            sp: vec![0;1].as_mut_ptr(),
             active_context: NIL_PTR,
             home_context: NIL_PTR,
             receiver: NIL_PTR,
@@ -115,7 +117,6 @@ impl<'a> Interpreter<'a> {
             arg_count: 0,
             new_method: NIL_PTR,
             prim_index: 0,
-            stack: vec![],
             mcache: vec![
                 MethodCacheEntry{
                     selector: NIL_PTR,
@@ -135,16 +136,29 @@ impl<'a> Interpreter<'a> {
         let ac: &Context = unsafe { mem::transmute(self.om.addr_of_oop(self.active_context)) };
 
         println!("caller: {}", ac.FSENDER_CALLER);
-        println!("instr_ptr: {}", ac.FINSTR_PTR);
-        println!("stack_ptr: {}", ac.FSTACK_PTR);
+        println!("instr_ptr: {:x}", ac.FINSTR_PTR);
+        println!("stack_ptr: {:x}", ac.FSTACK_PTR);
         println!("init_ip: {}", ac.FINIT_IP);
         println!("receiver: {}", ac.FRECEIVER_HOME);
 
-        panic!("done");
-
-        // fetchCtxRegs
+        self.fetch_ctx_regs(ac);
 
         self.run()
+    }
+
+    fn fetch_ctx_regs(&mut self, ac: &Context) {
+        self.home_context = if ac.is_block_ctx() { ac.FRECEIVER_HOME } else { self.active_context };
+        let hc: &Context = unsafe { mem::transmute(self.om.addr_of_oop(self.home_context)) };
+        self.receiver = hc.FRECEIVER_HOME;
+        self.method = hc.FMETHOD_BLOCK_ARGC;
+        unsafe {
+            let absmethod = self.om.addr_of_oop(self.method);
+            self.ip = (absmethod as *mut u8).offset((int_val(ac.FINSTR_PTR) as isize) - 1);
+            self.sp = self.om.addr_of_oop(self.active_context).offset(int_val(ac.FSTACK_PTR) as isize + context::TEMP_FR_START - 1);
+            println!("absmethod = {:p}", absmethod);
+            println!("ip = {:p}", self.ip);
+            println!("sp = {:p}", self.sp);
+        }
     }
 
     fn run(&mut self) {
@@ -237,7 +251,7 @@ impl<'a> Interpreter<'a> {
 
     fn pop_and_store_temp_var(&mut self, bytecode: u8) {
         let val = self.pop();
-        self.store_ptr(/* TEMP_FR_START + */ bytecode & 7, self.home_context, val);
+        self.store_ptr(context::TEMP_FR_START as u8 + (bytecode & 7), self.home_context, val);
     }
 
     fn return_stack_top_from_message(&mut self) {
@@ -271,7 +285,7 @@ impl<'a> Interpreter<'a> {
             },
             0x40 => {
                 let val = self.stack_top();
-                self.store_ptr(/*(*/desc & 0x3F/*) + TEMP_FR_START*/, self.home_context, val)
+                self.store_ptr((desc & 0x3F) + context::TEMP_FR_START as u8, self.home_context, val)
             },
             0x80 => panic!("invalid extended_store desc"),
             0xc0 => {
@@ -300,10 +314,6 @@ impl<'a> Interpreter<'a> {
         self.send_selector(literal, count);
     }
 
-    fn pop_stack_top(&mut self) {
-        self.pop();
-    }
-
     fn dup_stack_top(&mut self) {
         let val = self.stack_top();
         self.push(val);
@@ -317,7 +327,7 @@ impl<'a> Interpreter<'a> {
     fn send_arith_msg(&mut self, bytecode: u8) {
         let sel_idx = (bytecode - 176) as usize;
         if !INT_MESSAGES[sel_idx](self).is_ok() {
-            panic!("unhandled int primitive")
+            panic!("unhandled int primitive {}", sel_idx)
         }
     }
 
@@ -327,46 +337,47 @@ impl<'a> Interpreter<'a> {
     }
 
     fn short_unconditional_jump(&mut self, bytecode: u8) {
-        self.jump(((bytecode & 7) + 1) as usize);
+        self.jump(((bytecode & 7) + 1) as isize);
     }
 
     fn jump_if_false(&mut self, bytecode: u8) {
-        self.jumplf(FALSE_PTR, TRUE_PTR, ((bytecode & 7) + 1) as usize);
+        self.jumplf(FALSE_PTR, TRUE_PTR, ((bytecode & 7) + 1) as isize);
     }
 
     fn extended_unconditional_jump(&mut self, bytecode: u8) {
-        let next = self.next_byte() as usize;
-        let offset = 256 * (((bytecode as usize) & 7) - 4) + next;
+        let next = self.next_byte() as isize;
+        let offset = 256 * (((bytecode as isize) & 7) - 4) + next;
         self.jump(offset);
     }
 
     fn extended_jump_on_true(&mut self, bytecode: u8) {
-        let next = self.next_byte() as usize;
-        self.jumplf(TRUE_PTR, FALSE_PTR, 256*((bytecode as usize)&3) + next);
+        let next = self.next_byte() as isize;
+        self.jumplf(TRUE_PTR, FALSE_PTR, 256*((bytecode as isize)&3) + next);
     }
 
     fn extended_jump_on_false(&mut self, bytecode: u8) {
-        let next = self.next_byte() as usize;
-        self.jumplf(FALSE_PTR, TRUE_PTR, 256*((bytecode as usize)&3) + next);
+        let next = self.next_byte() as isize;
+        self.jumplf(FALSE_PTR, TRUE_PTR, 256*((bytecode as isize)&3) + next);
     }
 
     // primitives
     fn next_byte(&mut self) -> u8 {
-        let byte = 0;
-        /*
-        let byte = self.image[self.ip];
-        self.ip += 1;
-        */
-        byte
+        unsafe {
+            let byte = *self.ip;
+            self.ip = self.ip.offset(1);
+            byte
+        }
     }
 
-    fn jump(&mut self, offset: usize) {
-        self.ip += offset;
+    fn jump(&mut self, offset: isize) {
+        unsafe {
+            self.ip = self.ip.offset(offset);
+        }
     }
 
     /* assume that cond is one of TRUE_PTR, FALSE_PTR, and notcond is its inverse */
     // XXX(toshok) that's a terrible assumption.  why?
-    fn jumplf(&mut self, cond: OOP, notcond: OOP, offset: usize) {
+    fn jumplf(&mut self, cond: OOP, notcond: OOP, offset: isize) {
         let bool_val = self.stack_top();
         if bool_val == cond {
             // true branch
@@ -383,19 +394,34 @@ impl<'a> Interpreter<'a> {
     }
 
     pub fn push(&mut self, obj: OOP) {
-        self.stack.push(obj)
+        unsafe {
+            self.sp = self.sp.offset(1);
+            *self.sp = obj;
+        }
     }
 
     pub fn pop(&mut self) -> OOP {
-        self.stack.pop().unwrap()
+        unsafe {
+            let oop = *self.sp;
+            self.sp = self.sp.offset(-1);
+            oop
+        }
     }
 
     fn stack_top(&mut self) -> OOP {
-        *self.stack.last().unwrap()
+        unsafe {
+            *self.sp
+        }
     }
 
-    fn stack_val(&mut self, offset: usize) -> OOP {
-        *self.stack.get(self.stack.len()-offset-1).unwrap()
+    fn pop_stack_top(&mut self) {
+        self.pop();
+    }
+
+    fn stack_val(&mut self, offset: isize) -> OOP {
+        unsafe {
+            *self.sp.offset(-offset-1)
+        }
     }
 
     fn fetch_ptr(&self, offset: u8, obj: OOP) -> OOP {
@@ -416,7 +442,7 @@ impl<'a> Interpreter<'a> {
     }
 
     fn send_selector(&mut self, selector: OOP, argc: u8) {
-        let _new_receiver = self.stack_val(argc as usize);
+        let _new_receiver = self.stack_val(argc as isize);
 
         self.msg_selector = selector;
         self.arg_count = argc as usize;
