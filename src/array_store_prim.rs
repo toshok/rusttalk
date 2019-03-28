@@ -1,5 +1,5 @@
-use primitive_ops::{PrimResult};
 use interp::Interpreter;
+use primitive_ops::PrimResult;
 
 pub fn at(_interp: &mut Interpreter) -> PrimResult {
     Err("prAt not implemented")
@@ -68,4 +68,3 @@ pub fn next_instance(_interp: &mut Interpreter) -> PrimResult {
 pub fn new_method(_interp: &mut Interpreter) -> PrimResult {
     Err("prNewMethod not implemented")
 }
-

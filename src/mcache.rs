@@ -1,6 +1,6 @@
-use om::OOP;
-use primitive_ops::{PrimResult};
 use interp::Interpreter;
+use om::OOP;
+use primitive_ops::PrimResult;
 use std_ptrs::NIL_PTR;
 
 pub const CACHE_SIZE: usize = 1024;

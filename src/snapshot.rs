@@ -18,8 +18,7 @@ pub fn load(filename: &str, om: &mut OM) {
     let mut file = match File::open(&path) {
         // The `description` method of `io::Error` returns a string that
         // describes the error
-        Err(why) => panic!("couldn't open {}: {}", display,
-                                                   why.description()),
+        Err(why) => panic!("couldn't open {}: {}", display, why.description()),
         Ok(file) => file,
     };
 
@@ -34,13 +33,23 @@ pub fn load(filename: &str, om: &mut OM) {
     println!("image type = {}", image_type);
 
     if image_type == MANCHESTER2 {
-        load_manchester(file, om, object_space_length as usize, object_table_length as usize)
+        load_manchester(
+            file,
+            om,
+            object_space_length as usize,
+            object_table_length as usize,
+        )
     } else {
         panic!("unrecognized image type {}", image_type)
     }
 }
 
-fn load_manchester(mut file: File, om: &mut OM, object_space_length: usize, object_table_length: usize) {
+fn load_manchester(
+    mut file: File,
+    om: &mut OM,
+    object_space_length: usize,
+    object_table_length: usize,
+) {
     file.seek(SeekFrom::Start(512));
 
     print!("Loading object space... ");

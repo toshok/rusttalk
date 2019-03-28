@@ -7,7 +7,7 @@ pub struct Context {
     pub FMETHOD_BLOCK_ARGC: OOP,
     pub FINIT_IP: OOP,
     pub FRECEIVER_HOME: OOP,
-    pub FTEMP_FRAME: [OOP; 32]
+    pub FTEMP_FRAME: [OOP; 32],
 }
 
 pub const TEMP_FR_START: isize = 6;
@@ -17,3 +17,7 @@ impl Context {
         is_int(self.FMETHOD_BLOCK_ARGC)
     }
 }
+
+pub const MSG_SELECTOR: u8 = 0;
+pub const MSG_ARGS: u8 = 1;
+pub const MSG_SIZE: usize = 2;

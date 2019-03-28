@@ -1,6 +1,6 @@
 use interp::Interpreter;
-use primitive_ops::{PrimResult};
-use std_ptrs::{TRUE_PTR, FALSE_PTR};
+use primitive_ops::PrimResult;
+use std_ptrs::{FALSE_PTR, TRUE_PTR};
 
 pub fn equiv(interp: &mut Interpreter) -> PrimResult {
     let top = interp.pop();

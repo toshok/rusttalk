@@ -1,5 +1,5 @@
-use primitive_ops::{PrimResult};
 use interp::Interpreter;
+use primitive_ops::PrimResult;
 
 pub fn boot(_interp: &mut Interpreter) -> PrimResult {
     Err("prBoot not implemented")

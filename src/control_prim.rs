@@ -1,5 +1,5 @@
-use primitive_ops::{PrimResult};
 use interp::Interpreter;
+use primitive_ops::PrimResult;
 
 pub fn block_copy(_interp: &mut Interpreter) -> PrimResult {
     Err("prBlockCopy not implemented")

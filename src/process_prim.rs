@@ -1,5 +1,5 @@
-use primitive_ops::{PrimResult};
 use interp::Interpreter;
+use primitive_ops::PrimResult;
 
 pub fn signal(_interp: &mut Interpreter) -> PrimResult {
     Err("prSignal not implemented")

@@ -1,16 +1,29 @@
 use std::mem;
+use std::ptr;
+
 use context;
-use om::{OM, OOP, int_val};
+use context::{Context, MSG_ARGS, MSG_SELECTOR, MSG_SIZE};
+use mcache::{MethodCacheEntry, CACHE_SIZE};
+use om::{hash, int_val, METH_ARRAY, MSG_DICT, OM, OOP, SEL_START};
 use prim_table::{INT_MESSAGES, PRIMITIVE_DISPATCH};
 use process::{ACTIVE_PROCESS, SUSPENDED_CTX};
-use std_ptrs::{NIL_PTR, TRUE_PTR, FALSE_PTR, SCHED_ASS_PTR, MINUS_ONE_PTR, ZERO_PTR, ONE_PTR, TWO_PTR};
-use mcache::{MethodCacheEntry, CACHE_SIZE};
-use context::Context;
+use std_ptrs::{
+    CLASS_ARRAY, CLASS_MSG, FALSE_PTR, MINUS_ONE_PTR, NIL_PTR, ONE_PTR, SCHED_ASS_PTR,
+    SPECIAL_SELECTORS, TRUE_PTR, TWO_PTR, ZERO_PTR,
+};
 
 static VALUE: u8 = 1;
 
-// built-in selector?
-static MUST_BE_BOOLEAN: OOP = 7;
+// built-in selectors
+static DOES_NOT_UNDERSTAND: OOP = 21;
+static CANNOT_RETURN: OOP = 22;
+static MUST_BE_BOOLEAN: OOP = 26;
+
+// should be u8?
+static HEADER: u8 = 0;
+static LITERAL_START: u32 = 1;
+
+static SUPER_CLASS: u8 = 0;
 
 pub struct Interpreter<'a> {
     pub om: &'a OM,
@@ -31,84 +44,12 @@ pub struct Interpreter<'a> {
     pub mcache: Vec<MethodCacheEntry>,
 }
 
-    fn lookup_method_in_class(_cls: OOP, _selector: OOP) {
-        panic!("not implemented yet")
-        /*
-        OOP current;
-
-#ifdef SIM
-        extern void trace();
-
-        trace('l',Class,fetchClass(stackVal(argCount)));
-#endif
-
- start:
-
-        for (current= Class;  current != NIL_PTR;  current= superclass(current)) {
-                OOP dict= fetchPtr(MSG_DICT, current);
-
-                                        /*ST!Interpreter!lookupMethodInDictionary:!*/
-
-                /* lookup method in dictionary */
-                WORD length= Wlen(dict);
-                WORD index= ((length - SEL_START - 1) & hash(msgSelector))
-                                + SEL_START;
-                BOOL wrap= FALSE;
-
-                for (;;) {
-                        OOP nextSel= fetchPtr(index, dict);
-                        if (nextSel == NIL_PTR)         /* not found */
-                                break;
-                        if (nextSel == msgSelector) {   /* found */
-                                newMethod= fetchPtr(index - SEL_START,
-                                                    fetchPtr(METH_ARRAY, dict));
-                                primIndex= primitiveIndex(newMethod);
-#ifdef SIM
-                                trace('L',newMethod,stackVal(argCount));
-#endif
-                                return;
-                        }
-                        if (++index == length) {
-                                if (wrap) break;        /* not found */
-                                wrap= TRUE;
-                                index= SEL_START;
-                        }
-                }
-        }
-        /* message not found in current dictionary */
-        if (msgSelector == DOES_NOT_UNDERSTAND) {
-                extern void errorDoesNotUnderstand();
-                errorDoesNotUnderstand();
-        }
-
-        log("Message not understood");
-
-        /* create message */
-                                        /*ST!Interpreter!createActualMessage!*/
-        {
-                OOP argArray= instPtrs(CLASS_ARRAY, argCount);
-                OOP msg= instPtrs(CLASS_MSG, MSG_SIZE);
-                storePtr(MSG_SELECTOR, msg, msgSelector);
-                storePtr(MSG_ARGS, msg, argArray);
-                transfer(argCount, sp - (WORD *)ac - (argCount - 1),
-                         activeContext, 0, argArray);
-                pop(argCount);
-                push(msg);
-                argCount= 1;
-        }
-
-        msgSelector= DOES_NOT_UNDERSTAND;
-        /* lookupMethodInClass(Class);  */
-        goto start;
-        */
-    }
-
 impl<'a> Interpreter<'a> {
     pub fn new(om: &OM) -> Interpreter {
         Interpreter {
             om,
-            ip: vec![0;1].as_mut_ptr(),
-            sp: vec![0;1].as_mut_ptr(),
+            ip: vec![0; 1].as_mut_ptr(),
+            sp: vec![0; 1].as_mut_ptr(),
             active_context: NIL_PTR,
             home_context: NIL_PTR,
             receiver: NIL_PTR,
@@ -118,21 +59,22 @@ impl<'a> Interpreter<'a> {
             new_method: NIL_PTR,
             prim_index: 0,
             mcache: vec![
-                MethodCacheEntry{
+                MethodCacheEntry {
                     selector: NIL_PTR,
                     class: NIL_PTR,
                     method: NIL_PTR,
                     prim_index: 0
                 };
-                CACHE_SIZE],
+                CACHE_SIZE
+            ],
         }
     }
 
-//    fn fetch_ctx_regs 
+    //    fn fetch_ctx_regs
 
     pub fn startup(&mut self) {
         self.active_context = self.process_first_context();
-        
+
         let ac: &Context = unsafe { mem::transmute(self.om.addr_of_oop(self.active_context)) };
 
         println!("caller: {}", ac.FSENDER_CALLER);
@@ -147,14 +89,21 @@ impl<'a> Interpreter<'a> {
     }
 
     fn fetch_ctx_regs(&mut self, ac: &Context) {
-        self.home_context = if ac.is_block_ctx() { ac.FRECEIVER_HOME } else { self.active_context };
+        self.home_context = if ac.is_block_ctx() {
+            ac.FRECEIVER_HOME
+        } else {
+            self.active_context
+        };
         let hc: &Context = unsafe { mem::transmute(self.om.addr_of_oop(self.home_context)) };
         self.receiver = hc.FRECEIVER_HOME;
         self.method = hc.FMETHOD_BLOCK_ARGC;
         unsafe {
             let absmethod = self.om.addr_of_oop(self.method);
             self.ip = (absmethod as *mut u8).offset((int_val(ac.FINSTR_PTR) as isize) - 1);
-            self.sp = self.om.addr_of_oop(self.active_context).offset(int_val(ac.FSTACK_PTR) as isize + context::TEMP_FR_START - 1);
+            self.sp = self
+                .om
+                .addr_of_oop(self.active_context)
+                .offset(int_val(ac.FSTACK_PTR) as isize + context::TEMP_FR_START - 1);
             println!("absmethod = {:p}", absmethod);
             println!("ip = {:p}", self.ip);
             println!("sp = {:p}", self.sp);
@@ -210,7 +159,7 @@ impl<'a> Interpreter<'a> {
                 224...239 => self.send_literal_with_argc(bytecode, 1),
                 240...255 => self.send_literal_with_argc(bytecode, 2),
 
-                _ => panic!("illegal bytecode")
+                _ => panic!("illegal bytecode"),
             }
         }
     }
@@ -246,12 +195,16 @@ impl<'a> Interpreter<'a> {
 
     fn pop_and_store_receiver_var(&mut self, bytecode: u8) {
         let val = self.pop();
-        self.store_ptr(bytecode & 7, self.receiver, val);
+        self.store_ptr(self.receiver, bytecode & 7, val);
     }
 
     fn pop_and_store_temp_var(&mut self, bytecode: u8) {
         let val = self.pop();
-        self.store_ptr(context::TEMP_FR_START as u8 + (bytecode & 7), self.home_context, val);
+        self.store_ptr(
+            self.home_context,
+            context::TEMP_FR_START as u8 + (bytecode & 7),
+            val,
+        );
     }
 
     fn return_stack_top_from_message(&mut self) {
@@ -270,7 +223,7 @@ impl<'a> Interpreter<'a> {
             0x40 => self.temp(desc & 0x3f),
             0x80 => self.literal(desc & 0x3f),
             0xc0 => self.fetch_ptr(VALUE, self.literal(desc & 0x3f)),
-            _ => panic!("invalid extended_push desc")
+            _ => panic!("invalid extended_push desc"),
         };
         self.push(oop);
     }
@@ -281,17 +234,21 @@ impl<'a> Interpreter<'a> {
         match desc & 0xc0 {
             0 => {
                 let val = self.stack_top();
-                self.store_ptr(desc & 0x3f, self.receiver, val)
-            },
+                self.store_ptr(self.receiver, desc & 0x3f, val)
+            }
             0x40 => {
                 let val = self.stack_top();
-                self.store_ptr((desc & 0x3F) + context::TEMP_FR_START as u8, self.home_context, val)
-            },
+                self.store_ptr(
+                    self.home_context,
+                    (desc & 0x3F) + context::TEMP_FR_START as u8,
+                    val,
+                )
+            }
             0x80 => panic!("invalid extended_store desc"),
             0xc0 => {
                 let val = self.stack_top();
-                self.store_ptr(VALUE, self.literal(desc & 0x3f), val)
-            },
+                self.store_ptr(self.literal(desc & 0x3f), VALUE, val)
+            }
             _ => panic!("invalid extended_store desc"),
         }
     }
@@ -304,7 +261,7 @@ impl<'a> Interpreter<'a> {
     fn extended_send_of_literal(&mut self) {
         let desc = self.next_byte();
         let literal = self.literal(desc & 31);
-        self.send_selector(literal, desc>>5);
+        self.send_selector(literal, desc >> 5);
     }
 
     fn extended_send_of_extended_literal(&mut self) {
@@ -325,9 +282,14 @@ impl<'a> Interpreter<'a> {
     }
 
     fn send_arith_msg(&mut self, bytecode: u8) {
-        let sel_idx = (bytecode - 176) as usize;
-        if !INT_MESSAGES[sel_idx](self).is_ok() {
-            panic!("unhandled int primitive {}", sel_idx)
+        let mut sel_idx = bytecode - 176;
+        if !INT_MESSAGES[sel_idx as usize](self).is_ok() {
+            println!("int primitive {} returned error", sel_idx);
+
+            sel_idx += sel_idx;
+            let sel = self.fetch_ptr(sel_idx, SPECIAL_SELECTORS);
+            let argc = int_val(self.fetch_ptr(sel_idx + 1, SPECIAL_SELECTORS));
+            self.send_selector(sel, argc as u8);
         }
     }
 
@@ -352,12 +314,12 @@ impl<'a> Interpreter<'a> {
 
     fn extended_jump_on_true(&mut self, bytecode: u8) {
         let next = self.next_byte() as isize;
-        self.jumplf(TRUE_PTR, FALSE_PTR, 256*((bytecode as isize)&3) + next);
+        self.jumplf(TRUE_PTR, FALSE_PTR, 256 * ((bytecode as isize) & 3) + next);
     }
 
     fn extended_jump_on_false(&mut self, bytecode: u8) {
         let next = self.next_byte() as isize;
-        self.jumplf(FALSE_PTR, TRUE_PTR, 256*((bytecode as isize)&3) + next);
+        self.jumplf(FALSE_PTR, TRUE_PTR, 256 * ((bytecode as isize) & 3) + next);
     }
 
     // primitives
@@ -400,6 +362,10 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    pub fn pop_n(&mut self, n: isize) {
+        unsafe { self.sp = self.sp.offset(-1 * n) }
+    }
+
     pub fn pop(&mut self) -> OOP {
         unsafe {
             let oop = *self.sp;
@@ -409,9 +375,7 @@ impl<'a> Interpreter<'a> {
     }
 
     fn stack_top(&mut self) -> OOP {
-        unsafe {
-            *self.sp
-        }
+        unsafe { *self.sp }
     }
 
     fn pop_stack_top(&mut self) {
@@ -419,9 +383,7 @@ impl<'a> Interpreter<'a> {
     }
 
     fn stack_val(&mut self, offset: isize) -> OOP {
-        unsafe {
-            *self.sp.offset(-offset-1)
-        }
+        unsafe { *self.sp.offset(-offset - 1) }
     }
 
     fn fetch_ptr(&self, offset: u8, obj: OOP) -> OOP {
@@ -429,7 +391,7 @@ impl<'a> Interpreter<'a> {
         self.om.fetch_ptr(offset as isize, obj)
     }
 
-    fn store_ptr(&self, offset: u8, obj: OOP, value: OOP) {
+    fn store_ptr(&self, obj: OOP, offset: u8, value: OOP) {
         self.om.store_ptr(offset as isize, obj, value)
     }
 
@@ -441,19 +403,19 @@ impl<'a> Interpreter<'a> {
         0 // not-implemented
     }
 
+    fn superclass(&self, class: OOP) -> OOP {
+        self.fetch_ptr(SUPER_CLASS, class)
+    }
+
     fn send_selector(&mut self, selector: OOP, argc: u8) {
-        let _new_receiver = self.stack_val(argc as isize);
+        let new_receiver = self.stack_val(argc as isize);
 
         self.msg_selector = selector;
         self.arg_count = argc as usize;
 
-        /*
-        let cls = self.fetch_class(new_receiver);
+        let cls = self.om.fetch_class(new_receiver);
 
         self.send_selector_to_class(cls);
-        */
-
-        // not-implemented
     }
 
     /// process stuff that should live in process.rs
@@ -467,19 +429,24 @@ impl<'a> Interpreter<'a> {
     fn get_method_from_cache(&mut self, cls: OOP, selector: OOP) -> (OOP, u8) {
         /* see Bits of History, p.244 for an explanation of this hash function */
         let hash = ((selector ^ cls) as usize) & (CACHE_SIZE - 1);
-        let entry = &mut self.mcache[hash];
-
-        if entry.selector == selector && entry.class == cls {
-            /* hit */
-            return (entry.method, entry.prim_index);
+        {
+            let entry = &self.mcache[hash];
+            if entry.selector == selector && entry.class == cls {
+                /* hit */
+                return (entry.method, entry.prim_index);
+            }
         }
 
-        lookup_method_in_class(cls, selector);
+        let method = self.lookup_method_in_class(cls, selector);
+        self.new_method = method;
+        self.prim_index = self.primitive_index(self.new_method);
 
-        entry.selector = selector;
-        entry.class = cls;
-        entry.method = self.method;
-        entry.prim_index = self.prim_index;
+        let save_entry = &mut self.mcache[hash];
+
+        save_entry.selector = selector;
+        save_entry.class = cls;
+        save_entry.method = self.method;
+        save_entry.prim_index = self.prim_index;
 
         return (self.method, self.prim_index);
     }
@@ -504,9 +471,7 @@ impl<'a> Interpreter<'a> {
     }
 
     fn activate_new_method(&mut self) {
-        panic!("not implemented yet")
         /*
-        extern void trace_send();
         OOP hdr= header(newMethod);
         WORD ctxSize= HdrLargeCtx(hdr) ?
                         (TEMP_FR_START + 32)
@@ -523,5 +488,109 @@ impl<'a> Interpreter<'a> {
 
         newActiveCtx(newCtx);
         */
+    }
+
+    fn lookup_method_in_class(&mut self, cls: OOP, selector: OOP) -> OOP {
+        let mut method = self.lookup_method_in_class_(cls, selector);
+        if method == NIL_PTR {
+            let arg_count = self.arg_count;
+            {
+                let arg_array = self.om.inst_ptrs(CLASS_ARRAY, self.arg_count);
+                let msg = self.om.inst_ptrs(CLASS_MSG, MSG_SIZE);
+                self.store_ptr(msg, MSG_SELECTOR, self.msg_selector);
+                self.store_ptr(msg, MSG_ARGS, arg_array);
+
+                unsafe {
+                    // transfer(self.arg_count, sp - (WORD *)ac - (self.arg_count - 1),
+                    //             activeContext, 0, arg_array);
+                    ptr::copy(
+                        self.om.addr_of_oop(self.active_context) as *const u16,
+                        self.om.addr_of_oop(arg_array) as *mut u16,
+                        self.arg_count,
+                    );
+                }
+
+                self.pop_n(arg_count as isize);
+                self.push(msg);
+                self.arg_count = 1;
+            }
+
+            method = self.lookup_method_in_class_(cls, DOES_NOT_UNDERSTAND);
+            if method == NIL_PTR {
+                panic!("does not understand not found?")
+            }
+        }
+
+        method
+    }
+
+    fn lookup_method_in_class_(&self, cls: OOP, selector: OOP) -> OOP {
+        // recursively look up superclass hierarchy for the method
+
+        let mut current: OOP = cls;
+        while current != NIL_PTR {
+            let dict = self.fetch_ptr(MSG_DICT, current);
+
+            let length = self.om.len(dict);
+            let mut wrap = false;
+
+            let (len, _) = length.overflowing_sub(SEL_START as usize - 1);
+            let mut index: u8 = ((len & hash(selector)) + (SEL_START as usize)) as u8;
+
+            loop {
+                let next_sel = self.fetch_ptr(index, dict);
+                if next_sel == NIL_PTR {
+                    /* not found */
+                    break;
+                }
+
+                if next_sel == selector {
+                    /* found */
+                    return self.fetch_ptr(index - SEL_START, self.fetch_ptr(METH_ARRAY, dict));
+                }
+
+                index += 1;
+                if index as usize == length {
+                    if wrap {
+                        /* not found */
+                        break;
+                    }
+                    wrap = true;
+                    index = SEL_START;
+                }
+            }
+
+            current = self.superclass(current);
+        }
+
+        NIL_PTR
+    }
+
+    fn header(&self, obj: OOP) -> OOP {
+        self.fetch_ptr(HEADER, obj)
+    }
+
+    fn hdr_ext(&self, obj: OOP) -> OOP {
+        self.lit_meth(self.lit_count(obj) - 2, obj)
+    }
+
+    fn lit_meth(&self, offset: u32, obj: OOP) -> OOP {
+        self.fetch_ptr((offset + LITERAL_START) as u8, obj)
+    }
+
+    fn lit_count(&self, obj: OOP) -> OOP {
+        self.lit_cnt_hdr(self.header(obj))
+    }
+
+    fn lit_cnt_hdr(&self, header: OOP) -> OOP {
+        header & 0x3F
+    }
+
+    pub fn primitive_index(&self, m: OOP) -> u8 {
+        if self.header(m) & 0x7000 == 0x7000 {
+            (self.hdr_ext(m) as u8) & 0xFF
+        } else {
+            0
+        }
     }
 }
