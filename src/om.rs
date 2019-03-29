@@ -161,10 +161,21 @@ impl OM {
         self.free_ptr = NON_PTR;
         for_every_oop_reverse(|oop| {
             if self.is_free(oop) {
+                println!("found free node");
                 self.oops_left += 1;
                 self.free_list_prepend(oop);
             }
-        })
+        });
+
+        let mut oop = self.free_ptr;
+        loop {
+            if oop == NON_PTR {
+                break;
+            }
+
+            println!("free entry {}", oop);
+            oop = self.location_index(oop) as OOP;
+        }
     }
 
     // methods exposed for snapshot loading
@@ -188,7 +199,7 @@ impl OM {
         self.classes[oop as usize] = cls;
     }
 
-    pub fn fetch_ptr(&self, i: isize, oop: OOP) -> OOP {
+    pub fn fetch_ptr(&self, oop: OOP, i: isize) -> OOP {
         unsafe {
             let ptr = self.location_addr(oop).offset(i);
             println!(
@@ -202,7 +213,7 @@ impl OM {
         }
     }
 
-    pub fn store_ptr(&self, i: isize, oop: OOP, value: OOP) {
+    pub fn store_ptr(&self, oop: OOP, i: isize, value: OOP) {
         unsafe {
             let ptr = self.location_addr(oop).offset(i);
             *ptr = value;
@@ -221,12 +232,46 @@ impl OM {
         }
     }
 
-    pub fn inst_ptrs(&self, class: OOP, len: usize) -> OOP {
+    pub fn inst_ptrs(&mut self, class: OOP, len: usize) -> OOP {
         self.allocate(len * mem::size_of::<OOP>(), true, class)
     }
 
-    fn allocate(&self, _nbytes: usize, _ptrs: bool, _class: OOP) -> OOP {
-        panic!("siiiigh")
+    fn allocate(&mut self, nbytes: usize, ptrs: bool, class: OOP) -> OOP {
+        let oop = self.alloc(nbytes);
+        self.init(oop, nbytes, ptrs, class);
+        oop
+    }
+
+    fn alloc(&self, nbytes: usize) -> OOP {
+        let mut oop = self.attemptToAlloc(nbytes);
+        if oop == NON_PTR {
+            // self.compact();
+            oop = self.attemptToAlloc(nbytes);
+            if oop == NON_PTR {
+                // self.reclaim();
+                oop = self.attemptToAlloc(nbytes);
+                if oop == NON_PTR {
+                    // self.compact();
+                    oop = self.attemptToAlloc(nbytes);
+                    if oop == NON_PTR {
+                        panic!("errorNoMem");
+                    }
+                }
+            }
+        }
+        oop
+    }
+
+    fn attemptToAlloc(&self, nbytes: usize) -> OOP {
+        panic!("boo");
+    }
+
+    fn init(&mut self, oop: OOP, nbytes: usize, ptrs: bool, class: OOP) {
+        self.ot_rest[oop as usize] = if ptrs { REST_PTRS } else { 0 };
+        self.classes[oop as usize] = class;
+        self.sizes[oop as usize] = nbytes as SizeField;
+
+        /* place nil/0 in newly allocated object */
     }
 
     pub fn dump_oop(&self, oop: OOP) {

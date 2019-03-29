@@ -67,7 +67,8 @@ pub fn divide(interp: &mut Interpreter) -> PrimResult {
             let dividend_int = om::int_val(dividend_ptr);
             let res_int = dividend_int / divisor_int;
             if (dividend_int % divisor_int == 0) && interp.om.is_int_val(res_int) {
-                interp.push(interp.om.int_obj(res_int));
+                let res_obj = interp.om.int_obj(res_int);
+                interp.push(res_obj);
                 return Ok(());
             }
         }

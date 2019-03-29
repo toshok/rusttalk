@@ -8,8 +8,8 @@ use om::{hash, int_val, METH_ARRAY, MSG_DICT, OM, OOP, SEL_START};
 use prim_table::{INT_MESSAGES, PRIMITIVE_DISPATCH};
 use process::{ACTIVE_PROCESS, SUSPENDED_CTX};
 use std_ptrs::{
-    CLASS_ARRAY, CLASS_MSG, FALSE_PTR, MINUS_ONE_PTR, NIL_PTR, ONE_PTR, SCHED_ASS_PTR,
-    SPECIAL_SELECTORS, TRUE_PTR, TWO_PTR, ZERO_PTR,
+    CLASS_ARRAY, CLASS_METH_CTX, CLASS_MSG, FALSE_PTR, MINUS_ONE_PTR, NIL_PTR, ONE_PTR,
+    SCHED_ASS_PTR, SPECIAL_SELECTORS, TRUE_PTR, TWO_PTR, ZERO_PTR,
 };
 
 static VALUE: u8 = 1;
@@ -26,7 +26,7 @@ static LITERAL_START: u32 = 1;
 static SUPER_CLASS: u8 = 0;
 
 pub struct Interpreter<'a> {
-    pub om: &'a OM,
+    pub om: &'a mut OM,
     ip: *const u8,
     sp: *mut OOP,
 
@@ -45,7 +45,7 @@ pub struct Interpreter<'a> {
 }
 
 impl<'a> Interpreter<'a> {
-    pub fn new(om: &OM) -> Interpreter {
+    pub fn new(om: &'a mut OM) -> Interpreter {
         Interpreter {
             om,
             ip: vec![0; 1].as_mut_ptr(),
@@ -174,7 +174,7 @@ impl<'a> Interpreter<'a> {
     }
 
     fn push_receiver_var(&mut self, bytecode: u8) {
-        let oop = self.fetch_ptr(bytecode & 15, self.receiver);
+        let oop = self.fetch_ptr(self.receiver, bytecode & 15);
         self.push(oop)
     }
 
@@ -189,7 +189,7 @@ impl<'a> Interpreter<'a> {
     }
 
     fn push_literal_var(&mut self, bytecode: u8) {
-        let oop = self.fetch_ptr(VALUE, self.literal(bytecode & 31));
+        let oop = self.fetch_ptr(self.literal(bytecode & 31), VALUE);
         self.push(oop);
     }
 
@@ -219,10 +219,10 @@ impl<'a> Interpreter<'a> {
         let desc = self.next_byte();
 
         let oop = match desc & 0xc0 {
-            0 => self.fetch_ptr(desc & 0x3f, self.receiver),
+            0 => self.fetch_ptr(self.receiver, desc & 0x3f),
             0x40 => self.temp(desc & 0x3f),
             0x80 => self.literal(desc & 0x3f),
-            0xc0 => self.fetch_ptr(VALUE, self.literal(desc & 0x3f)),
+            0xc0 => self.fetch_ptr(self.literal(desc & 0x3f), VALUE),
             _ => panic!("invalid extended_push desc"),
         };
         self.push(oop);
@@ -287,8 +287,8 @@ impl<'a> Interpreter<'a> {
             println!("int primitive {} returned error", sel_idx);
 
             sel_idx += sel_idx;
-            let sel = self.fetch_ptr(sel_idx, SPECIAL_SELECTORS);
-            let argc = int_val(self.fetch_ptr(sel_idx + 1, SPECIAL_SELECTORS));
+            let sel = self.fetch_ptr(SPECIAL_SELECTORS, sel_idx);
+            let argc = int_val(self.fetch_ptr(SPECIAL_SELECTORS, sel_idx + 1));
             self.send_selector(sel, argc as u8);
         }
     }
@@ -386,17 +386,19 @@ impl<'a> Interpreter<'a> {
         unsafe { *self.sp.offset(-offset - 1) }
     }
 
-    fn fetch_ptr(&self, offset: u8, obj: OOP) -> OOP {
-        println!("interp.fetch_ptr(offset={}, obj={})", offset, obj);
-        self.om.fetch_ptr(offset as isize, obj)
+    fn fetch_ptr(&self, obj: OOP, offset: u8) -> OOP {
+        println!("interp.fetch_ptr(obj={}, offset={})", obj, offset);
+        self.om.fetch_ptr(obj, offset as isize)
     }
 
     fn store_ptr(&self, obj: OOP, offset: u8, value: OOP) {
-        self.om.store_ptr(offset as isize, obj, value)
+        self.om.store_ptr(obj, offset as isize, value)
     }
 
-    fn temp(&self, _temp_offset: u8) -> OOP {
-        0 // not-implemented
+    fn temp(&self, offset: u8) -> OOP {
+        let hc: &Context = unsafe { mem::transmute(self.om.addr_of_oop(self.home_context)) };
+
+        hc.FTEMP_FRAME[offset as usize]
     }
 
     fn literal(&self, _literal_offset: u8) -> OOP {
@@ -404,7 +406,7 @@ impl<'a> Interpreter<'a> {
     }
 
     fn superclass(&self, class: OOP) -> OOP {
-        self.fetch_ptr(SUPER_CLASS, class)
+        self.fetch_ptr(class, SUPER_CLASS)
     }
 
     fn send_selector(&mut self, selector: OOP, argc: u8) {
@@ -421,9 +423,9 @@ impl<'a> Interpreter<'a> {
     /// process stuff that should live in process.rs
     fn process_first_context(&mut self) -> OOP {
         self.om.dump_oop(SCHED_ASS_PTR);
-        let scheduler = self.fetch_ptr(VALUE, SCHED_ASS_PTR);
-        let active_process = self.fetch_ptr(ACTIVE_PROCESS, scheduler);
-        self.fetch_ptr(SUSPENDED_CTX, active_process)
+        let scheduler = self.fetch_ptr(SCHED_ASS_PTR, VALUE);
+        let active_process = self.fetch_ptr(scheduler, ACTIVE_PROCESS);
+        self.fetch_ptr(active_process, SUSPENDED_CTX)
     }
 
     fn get_method_from_cache(&mut self, cls: OOP, selector: OOP) -> (OOP, u8) {
@@ -471,23 +473,37 @@ impl<'a> Interpreter<'a> {
     }
 
     fn activate_new_method(&mut self) {
-        /*
-        OOP hdr= header(newMethod);
-        WORD ctxSize= HdrLargeCtx(hdr) ?
-                        (TEMP_FR_START + 32)
-                          : (TEMP_FR_START + 12);
-        OOP newCtx= instPtrs(CLASS_METH_CTX, ctxSize);
-        CONTEXT *ABSnewCtx= (CONTEXT *)addrOfOop(newCtx);
-        CtxStorePtr(FSENDER_CALLER, ABSnewCtx, activeContext);
-        AstrIPval(HdrInitIPofMeth(hdr), ABSnewCtx);
-        AstrSPval(HdrTempCntOf(hdr), ABSnewCtx);
-        CtxStorePtr(FMETHOD_BLOCK_ARGC, ABSnewCtx, newMethod);
-        transfer(argCount + 1, sp - (WORD*)ac - argCount,
-                 activeContext, RECEIVER, newCtx);
-        pop(argCount + 1);
+        let hdr = self.header(self.new_method);
+        let ctx_size = if self.hdr_large_ctx(hdr) {
+            context::TEMP_FR_START as usize + 32
+        } else {
+            context::TEMP_FR_START as usize + 12
+        };
+        let new_ctx = self.om.inst_ptrs(CLASS_METH_CTX, ctx_size);
 
-        newActiveCtx(newCtx);
-        */
+        let abs_new_ctx: &mut Context = unsafe { mem::transmute(self.om.addr_of_oop(new_ctx)) };
+
+        abs_new_ctx.FSENDER_CALLER = self.active_context;
+        abs_new_ctx.FINSTR_PTR = self.om.int_obj(self.hdr_init_ip_of_meth(hdr) as i32);
+        abs_new_ctx.FSTACK_PTR = self.om.int_obj(self.hdr_temp_count_of(hdr) as i32);
+        abs_new_ctx.FMETHOD_BLOCK_ARGC = self.new_method;
+
+        unsafe {
+            // transfer(argCount + 1, sp - (WORD*)ac - argCount,
+            //          activeContext, RECEIVER, newCtx);
+            ptr::copy(
+                self.om.addr_of_oop(self.active_context) as *const u16, // .offset(sp - ...)
+                self.om.addr_of_oop(new_ctx) as *mut u16,               // .offset(RECEIVER)
+                self.arg_count + 1,
+            );
+        }
+
+        let arg_count = self.arg_count;
+
+        self.pop_n((arg_count + 1) as isize);
+
+        self.active_context = new_ctx;
+        self.fetch_ctx_regs(abs_new_ctx);
     }
 
     fn lookup_method_in_class(&mut self, cls: OOP, selector: OOP) -> OOP {
@@ -529,7 +545,7 @@ impl<'a> Interpreter<'a> {
 
         let mut current: OOP = cls;
         while current != NIL_PTR {
-            let dict = self.fetch_ptr(MSG_DICT, current);
+            let dict = self.fetch_ptr(current, MSG_DICT);
 
             let length = self.om.len(dict);
             let mut wrap = false;
@@ -538,7 +554,7 @@ impl<'a> Interpreter<'a> {
             let mut index: u8 = ((len & hash(selector)) + (SEL_START as usize)) as u8;
 
             loop {
-                let next_sel = self.fetch_ptr(index, dict);
+                let next_sel = self.fetch_ptr(dict, index);
                 if next_sel == NIL_PTR {
                     /* not found */
                     break;
@@ -546,7 +562,7 @@ impl<'a> Interpreter<'a> {
 
                 if next_sel == selector {
                     /* found */
-                    return self.fetch_ptr(index - SEL_START, self.fetch_ptr(METH_ARRAY, dict));
+                    return self.fetch_ptr(self.fetch_ptr(dict, METH_ARRAY), index - SEL_START);
                 }
 
                 index += 1;
@@ -567,15 +583,27 @@ impl<'a> Interpreter<'a> {
     }
 
     fn header(&self, obj: OOP) -> OOP {
-        self.fetch_ptr(HEADER, obj)
+        self.fetch_ptr(obj, HEADER)
     }
 
     fn hdr_ext(&self, obj: OOP) -> OOP {
         self.lit_meth(self.lit_count(obj) - 2, obj)
     }
 
+    fn hdr_large_ctx(&self, hdr: OOP) -> bool {
+        hdr & 0x40 != 0
+    }
+
+    fn hdr_init_ip_of_meth(&self, hdr: OOP) -> u32 {
+        ((self.lit_cnt_hdr(hdr) + LITERAL_START) * mem::size_of::<u32>() as u32 + 1)
+    }
+
+    fn hdr_temp_count_of(&self, hdr: OOP) -> u32 {
+        (((hdr) & 0x0F80) >> 7)
+    }
+
     fn lit_meth(&self, offset: u32, obj: OOP) -> OOP {
-        self.fetch_ptr((offset + LITERAL_START) as u8, obj)
+        self.fetch_ptr(obj, (offset + LITERAL_START) as u8)
     }
 
     fn lit_count(&self, obj: OOP) -> OOP {
