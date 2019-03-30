@@ -8,16 +8,12 @@ use om::{hash, int_val, METH_ARRAY, MSG_DICT, OM, OOP, SEL_START};
 use prim_table::{INT_MESSAGES, PRIMITIVE_DISPATCH};
 use process::{ACTIVE_PROCESS, SUSPENDED_CTX};
 use std_ptrs::{
-    CLASS_ARRAY, CLASS_METH_CTX, CLASS_MSG, FALSE_PTR, MINUS_ONE_PTR, NIL_PTR, ONE_PTR,
-    SCHED_ASS_PTR, SPECIAL_SELECTORS, TRUE_PTR, TWO_PTR, ZERO_PTR,
+    CLASS_ARRAY, CLASS_METH_CTX, CLASS_MSG, DOES_NOT_UNDERSTAND, FALSE_PTR, MINUS_ONE_PTR,
+    MUST_BE_BOOLEAN, NIL_PTR, ONE_PTR, SCHED_ASS_PTR, SPECIAL_SELECTORS, TRUE_PTR, TWO_PTR,
+    ZERO_PTR,
 };
 
 static VALUE: u8 = 1;
-
-// built-in selectors
-static DOES_NOT_UNDERSTAND: OOP = 21;
-static CANNOT_RETURN: OOP = 22;
-static MUST_BE_BOOLEAN: OOP = 26;
 
 // should be u8?
 static HEADER: u8 = 0;
@@ -74,6 +70,7 @@ impl<'a> Interpreter<'a> {
 
     pub fn startup(&mut self) {
         self.active_context = self.process_first_context();
+        self.om.register_active_context(self.active_context);
 
         let ac: &Context = unsafe { mem::transmute(self.om.addr_of_oop(self.active_context)) };
 
@@ -104,9 +101,9 @@ impl<'a> Interpreter<'a> {
                 .om
                 .addr_of_oop(self.active_context)
                 .offset(int_val(ac.FSTACK_PTR) as isize + context::TEMP_FR_START - 1);
-            println!("absmethod = {:p}", absmethod);
-            println!("ip = {:p}", self.ip);
-            println!("sp = {:p}", self.sp);
+            // println!("absmethod = {:p}", absmethod);
+            // println!("ip = {:p}", self.ip);
+            // println!("sp = {:p}", self.sp);
         }
     }
 
@@ -387,7 +384,7 @@ impl<'a> Interpreter<'a> {
     }
 
     fn fetch_ptr(&self, obj: OOP, offset: u8) -> OOP {
-        println!("interp.fetch_ptr(obj={}, offset={})", obj, offset);
+        // println!("interp.fetch_ptr(obj={}, offset={})", obj, offset);
         self.om.fetch_ptr(obj, offset as isize)
     }
 
@@ -422,7 +419,7 @@ impl<'a> Interpreter<'a> {
 
     /// process stuff that should live in process.rs
     fn process_first_context(&mut self) -> OOP {
-        self.om.dump_oop(SCHED_ASS_PTR);
+        // self.om.dump_oop(SCHED_ASS_PTR);
         let scheduler = self.fetch_ptr(SCHED_ASS_PTR, VALUE);
         let active_process = self.fetch_ptr(scheduler, ACTIVE_PROCESS);
         self.fetch_ptr(active_process, SUSPENDED_CTX)
@@ -463,7 +460,16 @@ impl<'a> Interpreter<'a> {
 
     fn execute_new_method(&mut self) {
         if self.prim_index == 0 {
-            panic!("not implemented yet")
+            let flag = self.flag_value(self.new_method);
+
+            if flag == 6 {
+                // quick instance load
+                let obj = self.pop();
+                let result = self.fetch_ptr(obj, self.field_index(self.new_method));
+                self.push(result);
+            } else {
+                self.activate_new_method();
+            }
         } else {
             let prim = PRIMITIVE_DISPATCH[self.prim_index as usize];
             if !prim(self).is_ok() {
@@ -504,6 +510,7 @@ impl<'a> Interpreter<'a> {
 
         self.active_context = new_ctx;
         self.fetch_ctx_regs(abs_new_ctx);
+        self.om.register_active_context(new_ctx);
     }
 
     fn lookup_method_in_class(&mut self, cls: OOP, selector: OOP) -> OOP {
@@ -612,6 +619,14 @@ impl<'a> Interpreter<'a> {
 
     fn lit_cnt_hdr(&self, header: OOP) -> OOP {
         header & 0x3F
+    }
+
+    fn flag_value(&self, m: OOP) -> u8 {
+        ((self.header(m) & 0x7000) >> 12) as u8
+    }
+
+    fn field_index(&self, m: OOP) -> u8 {
+        ((self.header(m) & 0x0F80) >> 7) as u8
     }
 
     pub fn primitive_index(&self, m: OOP) -> u8 {

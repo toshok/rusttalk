@@ -12,9 +12,16 @@ pub const TRUE_PTR: OOP = 3;
 
 pub const SCHED_ASS_PTR: OOP = 4;
 
+pub const DOES_NOT_UNDERSTAND: OOP = 21;
+pub const CANNOT_RETURN: OOP = 22;
 pub const SPECIAL_SELECTORS: OOP = 24;
 pub const CHAR_TABLE: OOP = 25;
-pub const SMALLTALK: OOP = 9; /* the system dictionary, not defd in G&R */
+pub const MUST_BE_BOOLEAN: OOP = 26;
+
+const SMALLTALK: OOP = 9; /* the system dictionary, not defd in G&R */
+pub const SYSTEM_DICTIONARY: OOP = SMALLTALK;
+
+pub const LAST_REF_COUNTED_OOP: OOP = 26; // == MUST_BE_BOOLEAN
 
 pub const CLASS_SMALL_INTEGER: OOP = 6; /* p. 687 */
 pub const CLASS_STRING: OOP = 7;

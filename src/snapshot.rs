@@ -1,9 +1,10 @@
 use std::error::Error;
 use std::fs::File;
 use std::io::{Seek, SeekFrom};
+use std::mem;
 use std::path::Path;
 
-use om::{OM, OOP};
+use om::{OM, OM_SIZE, OOP};
 
 extern crate byteorder;
 use snapshot::byteorder::{BigEndian, ReadBytesExt};
@@ -54,7 +55,7 @@ fn load_manchester(
 
     print!("Loading object space... ");
 
-    let mut object_space = vec![0u32; object_space_length];
+    let mut object_space = vec![0u32; OM_SIZE];
     for i in 0..object_space_length {
         object_space[i] = file.read_u32::<BigEndian>().unwrap();
     }
@@ -71,19 +72,20 @@ fn load_manchester(
         offsets[o] = file.read_i32::<BigEndian>().unwrap();
     }
     for o in 0..object_table_length {
-        om.set_ot_count(o as OOP, file.read_u8().unwrap());
+        om.set_count(o as OOP, file.read_u8().unwrap());
     }
     for o in 0..object_table_length {
-        om.set_ot_rest(o as OOP, file.read_u8().unwrap());
+        om.set_rest(o as OOP, file.read_u8().unwrap());
     }
     for o in 0..object_table_length {
-        om.set_ot_size(o as OOP, file.read_i32::<BigEndian>().unwrap());
+        om.set_size(o as OOP, file.read_i32::<BigEndian>().unwrap() as usize);
     }
 
     om.initialize_object_space(&mut object_space, offsets);
+    mem::forget(object_space);
 
     for o in 0..object_table_length {
-        om.set_ot_class(o as OOP, file.read_u32::<BigEndian>().unwrap() as OOP)
+        om.set_class(o as OOP, file.read_u32::<BigEndian>().unwrap() as OOP)
     }
     println!("done");
 
@@ -93,6 +95,7 @@ fn load_manchester(
     om.initialize_free_list();
 
     // initialize free chunk lists
+    om.initialize_free_chunks(object_space_length);
 
     println!("snapshot loaded.");
 }
