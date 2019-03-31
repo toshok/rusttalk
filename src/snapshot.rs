@@ -72,7 +72,7 @@ fn load_manchester(
         offsets[o] = file.read_i32::<BigEndian>().unwrap();
     }
     for o in 0..object_table_length {
-        om.set_count(o as OOP, file.read_u8().unwrap());
+        om.set_count(o as OOP, file.read_u8().unwrap().into());
     }
     for o in 0..object_table_length {
         om.set_rest(o as OOP, file.read_u8().unwrap());

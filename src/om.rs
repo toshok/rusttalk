@@ -66,7 +66,7 @@ pub struct OM {
 
     ot_loc: [Loc; OT_SIZE],
     ot_rest: [u8; OT_SIZE],      /* bitmap, free, ptr and odd bits */
-    ot_count: [u8; OT_SIZE],     /* reference counts */
+    ot_count: [u16; OT_SIZE],    /* reference counts */
     sizes: [SizeField; OT_SIZE], /* sizes of the object bodies */
     classes: [OOP; OT_SIZE],     /* classes of the objects */
 
@@ -96,7 +96,7 @@ impl OM {
     }
 
     // getters/setters for the ot_* arrays
-    fn get_count(&self, oop: OOP) -> u8 {
+    fn get_count(&self, oop: OOP) -> u16 {
         self.ot_count[oop as usize]
     }
 
@@ -116,7 +116,7 @@ impl OM {
         self.ot_rest[oop as usize]
     }
 
-    pub fn set_count(&mut self, oop: OOP, count: u8) {
+    pub fn set_count(&mut self, oop: OOP, count: u16) {
         // println!("setting count for oop {} to {}", oop, count);
         self.ot_count[oop as usize] = count;
     }
@@ -276,9 +276,12 @@ impl OM {
         }
     }
 
-    pub fn store_ptr(&self, oop: OOP, i: isize, value: OOP) {
+    pub fn store_ptr(&mut self, oop: OOP, i: isize, value: OOP) {
+        self.inc_ref(value);
+
         unsafe {
             let ptr = self.location_addr(oop).offset(i);
+            self.dec_ref(*ptr);
             *ptr = value;
         }
     }
@@ -300,6 +303,7 @@ impl OM {
     }
 
     fn deallocate(&mut self, oop: OOP) {
+        // println!("deallocating {}", oop);
         if self.is_bitmap(oop) {
             // TODO(toshok) some additional freeing here. not sure how we're supposed to free "native" bitmaps?
             let rest = self.get_rest(oop);
@@ -324,7 +328,7 @@ impl OM {
     }
 
     fn alloc(&mut self, nbytes: usize) -> OOP {
-        println!("alloc({})", nbytes);
+        // println!("alloc({})", nbytes);
         let mut oop;
 
         let wsize = to_word_size(nbytes);
@@ -365,13 +369,13 @@ impl OM {
         while oop != NON_PTR {
             let next_oop = self.get_free_chunk_next(oop);
             let available_size = to_word_size(self.get_size(oop));
-            println!(
-                "attempt_to_alloc {}, available_size = {}",
-                nbytes, available_size
-            );
+            // println!(
+            //     "attempt_to_alloc {}, available_size = {}",
+            //     nbytes, available_size
+            // );
             if available_size == wsize {
                 // exact match
-                println!("   found exact match");
+                // println!("   found exact match");
                 if prev == NON_PTR {
                     self.fcl_heads[BIG_SIZE] = next_oop;
                 } else {
@@ -382,13 +386,13 @@ impl OM {
 
             let excess_words = (available_size as isize) - (wsize as isize);
             if excess_words < 0 {
-                println!("   not enough words, skipping");
+                // println!("   not enough words, skipping");
                 prev = oop;
                 oop = next_oop;
                 continue;
             }
 
-            println!("   more than enough words, splitting object");
+            // println!("   more than enough words, splitting object");
             // available size is larger than wsize.  split the object
             let oop_addr = unsafe { self.location_addr(oop).offset(wsize as isize) };
             let rest_oop =
@@ -418,10 +422,10 @@ impl OM {
             self.set_free_chunk_next(rest_oop, rest_next);
             self.fcl_heads[fcl_idx] = rest_oop;
 
-            println!(
-                "put rest_oop (size {}) in free chunk list {}",
-                excess_words, fcl_idx
-            );
+            // println!(
+            //     "put rest_oop (size {}) in free chunk list {}",
+            //     excess_words, fcl_idx
+            // );
             return oop;
         }
 
@@ -450,9 +454,11 @@ impl OM {
     }
 
     fn init(&mut self, oop: OOP, nbytes: usize, ptrs: bool, class: OOP) {
-        self.ot_rest[oop as usize] = if ptrs { REST_PTRS } else { 0 };
-        self.classes[oop as usize] = class;
-        self.sizes[oop as usize] = nbytes as SizeField;
+        self.inc_ref(class);
+
+        self.set_rest(oop, if ptrs { REST_PTRS } else { 0 });
+        self.set_class(oop, class);
+        self.set_size(oop, nbytes);
 
         /* place nil/0 in newly allocated object */
         let defaultEntry = if ptrs { NIL_PTR } else { 0 };
@@ -466,12 +472,37 @@ impl OM {
         }
     }
 
+    pub fn dump_ot(&self) {
+        for i in FIRST_OOP..=LAST_OOP {
+            self.dump_oop(i as OOP);
+        }
+    }
+
     pub fn dump_oop(&self, oop: OOP) {
-        println!("dumping object {}", oop as usize);
-        println!("class: {}", self.classes[oop as usize]);
-        println!("size: {}", self.sizes[oop as usize]);
-        println!("rest: {}", self.ot_rest[oop as usize]);
-        println!("count: {}", self.ot_count[oop as usize]);
+        print!("{}:", oop as usize);
+        print!(" class: {}", self.get_class(oop));
+        if self.get_class(oop) <= LAST_REF_COUNTED_OOP {
+            match self.get_class(oop) {
+                CLASS_SMALL_INTEGER => print!("(smi)"),
+                CLASS_STRING => print!("(string)"),
+                CLASS_ARRAY => print!("(array)"),
+                CLASS_FLOAT => print!("(float)"),
+                CLASS_METH_CTX => print!("(meth_ctx)"),
+                CLASS_BLOCK_CTX => print!("(block_ctx)"),
+                CLASS_POINT => print!("(point)"),
+                CLASS_LG_POS_INT => print!("(lg_pos_int)"),
+                CLASS_DISPLAY_BITMAP => print!("(display_bitmap)"),
+                CLASS_MSG => print!("(message)"),
+                CLASS_COMPILED_METHOD => print!("(compiled_method)"),
+                CLASS_SEMA => print!("(sema)"),
+                CLASS_CHARACTER => print!("(character)"),
+                CLASS_FORM => print!("(form)"),
+                _ => print!("(unknown)"),
+            }
+        }
+        print!(" size: {}", self.get_size(oop));
+        print!(" rest: {}", self.get_rest(oop));
+        println!(" count: {}", self.get_count(oop));
     }
 
     fn set_free_list_next(&mut self, node: OOP, next: OOP) {
@@ -504,10 +535,12 @@ impl OM {
         }
         let cnt = self.ot_count[oop as usize];
         self.ot_count[oop as usize] = cnt + 1;
-        println!("inc_ref {} -> {}", oop, cnt + 1);
     }
 
     pub fn dec_ref(&mut self, oop: OOP) {
+        if !counted(oop) {
+            return;
+        }
         let cnt = self.ot_count[oop as usize];
         self.ot_count[oop as usize] = cnt - 1;
     }
@@ -529,25 +562,29 @@ impl OM {
     }
 
     fn mark_rest(&mut self, root: OOP) {
-        let class = self.get_class(root);
-        self.mark_from(class);
-
-        let rootptr = self.location_addr(root);
-
         unsafe {
+            // println!(
+            //     "marking fields (size = {}, last_pointer_index = {})",
+            //     self.get_size(root),
+            //     self.last_pointer_index(root)
+            // );
             for offset in 0..self.last_pointer_index(root) {
-                let val = rootptr.offset(offset as isize);
-                if !self.is_int_val(*val as i32) {
+                let val = self.location_addr(root).offset(offset as isize);
+                if !is_int(*val) {
                     self.mark_from(*val);
                 }
             }
         }
+
+        // println!("marking class");
+        let class = self.get_class(root);
+        self.mark_from(class);
     }
 
     fn mark_from(&mut self, root: OOP) {
         if self.unmarked(root) {
             self.mark(root);
-            println!("marked {}, refcount {}", root, self.ot_count[root as usize]);
+            // println!("marked {}, refcount {}", root, self.ot_count[root as usize]);
             self.mark_rest(root);
         }
     }
@@ -555,6 +592,7 @@ impl OM {
     fn mark_objects(&mut self) {
         self.mark_from(SYSTEM_DICTIONARY);
 
+        println!("mark_from active_context");
         let active_context = self.active_context;
         self.mark_from(active_context);
     }
@@ -586,22 +624,20 @@ impl OM {
 
         for_every_oop(|oop| {
             if !self.is_free(oop) {
-                let count = self.ot_count[oop as usize];
+                let count = self.get_count(oop);
 
                 if self.unmarked(oop) {
                     self.deallocate(oop);
                 } else {
-                    let count = self.ot_count[oop as usize];
-                    println!("OOP = {}, count = {}", oop, count);
+                    // println!("OOP = {}, count = {}", oop, count);
                     self.set_count(oop, count - 2);
                     let oop_class = self.get_class(oop);
                     self.inc_ref(oop_class);
 
                     unsafe {
-                        let oopptr = self.addr_of_oop(oop);
                         for offset in 0..self.last_pointer_index(oop) {
-                            let val = oopptr.offset(offset as isize);
-                            if !self.is_int_val(*val as i32) {
+                            let val = self.addr_of_oop(oop).offset(offset as isize);
+                            if !is_int(*val) {
                                 self.inc_ref(*val);
                             }
                         }
@@ -616,7 +652,7 @@ impl OM {
         self.inc_ref(active_context);
 
         for i in NIL_PTR..=LAST_REF_COUNTED_OOP {
-            self.set_count(i, SATURATED);
+            self.set_count(i, SATURATED.into());
         }
     }
 
