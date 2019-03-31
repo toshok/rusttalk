@@ -2,7 +2,7 @@ use std::mem;
 use std::ptr;
 
 use context;
-use context::{Context, MSG_ARGS, MSG_SELECTOR, MSG_SIZE};
+use context::{Context, MSG_ARGS, MSG_SELECTOR, MSG_SIZE, RECEIVER};
 use mcache::{MethodCacheEntry, CACHE_SIZE};
 use om::{hash, int_val, METH_ARRAY, MSG_DICT, OM, OOP, SEL_START};
 use prim_table::{INT_MESSAGES, PRIMITIVE_DISPATCH};
@@ -192,13 +192,15 @@ impl<'a> Interpreter<'a> {
 
     fn pop_and_store_receiver_var(&mut self, bytecode: u8) {
         let val = self.pop();
-        self.store_ptr(self.receiver, bytecode & 7, val);
+        let receiver = self.receiver;
+        self.store_ptr(receiver, bytecode & 7, val);
     }
 
     fn pop_and_store_temp_var(&mut self, bytecode: u8) {
         let val = self.pop();
+        let home_context = self.home_context;
         self.store_ptr(
-            self.home_context,
+            home_context,
             context::TEMP_FR_START as u8 + (bytecode & 7),
             val,
         );
@@ -231,12 +233,14 @@ impl<'a> Interpreter<'a> {
         match desc & 0xc0 {
             0 => {
                 let val = self.stack_top();
-                self.store_ptr(self.receiver, desc & 0x3f, val)
+                let receiver = self.receiver;
+                self.store_ptr(receiver, desc & 0x3f, val)
             }
             0x40 => {
                 let val = self.stack_top();
+                let home_context = self.home_context;
                 self.store_ptr(
-                    self.home_context,
+                    home_context,
                     (desc & 0x3F) + context::TEMP_FR_START as u8,
                     val,
                 )
@@ -244,7 +248,8 @@ impl<'a> Interpreter<'a> {
             0x80 => panic!("invalid extended_store desc"),
             0xc0 => {
                 let val = self.stack_top();
-                self.store_ptr(self.literal(desc & 0x3f), VALUE, val)
+                let literal = self.literal(desc & 0x3f);
+                self.store_ptr(literal, VALUE, val)
             }
             _ => panic!("invalid extended_store desc"),
         }
@@ -280,8 +285,13 @@ impl<'a> Interpreter<'a> {
 
     fn send_arith_msg(&mut self, bytecode: u8) {
         let mut sel_idx = bytecode - 176;
-        if !INT_MESSAGES[sel_idx as usize](self).is_ok() {
-            println!("int primitive {} returned error", sel_idx);
+        let rv = INT_MESSAGES[sel_idx as usize](self);
+        if !rv.is_ok() {
+            println!(
+                "int primitive {} returned error {}",
+                sel_idx,
+                rv.unwrap_err()
+            );
 
             sel_idx += sel_idx;
             let sel = self.fetch_ptr(SPECIAL_SELECTORS, sel_idx);
@@ -353,6 +363,7 @@ impl<'a> Interpreter<'a> {
     }
 
     pub fn push(&mut self, obj: OOP) {
+        // TODO(toshok) this should incref obj, right?
         unsafe {
             self.sp = self.sp.offset(1);
             *self.sp = obj;
@@ -360,10 +371,12 @@ impl<'a> Interpreter<'a> {
     }
 
     pub fn pop_n(&mut self, n: isize) {
+        // TODO(toshok) this should decref the popped items, right?
         unsafe { self.sp = self.sp.offset(-1 * n) }
     }
 
     pub fn pop(&mut self) -> OOP {
+        // TODO(toshok) this should decref the popped item, right?
         unsafe {
             let oop = *self.sp;
             self.sp = self.sp.offset(-1);
@@ -388,7 +401,7 @@ impl<'a> Interpreter<'a> {
         self.om.fetch_ptr(obj, offset as isize)
     }
 
-    fn store_ptr(&self, obj: OOP, offset: u8, value: OOP) {
+    fn store_ptr(&mut self, obj: OOP, offset: u8, value: OOP) {
         self.om.store_ptr(obj, offset as isize, value)
     }
 
@@ -472,8 +485,26 @@ impl<'a> Interpreter<'a> {
             }
         } else {
             let prim = PRIMITIVE_DISPATCH[self.prim_index as usize];
-            if !prim(self).is_ok() {
+            let rv = prim(self);
+            if !rv.is_ok() {
+                println!("primitive returned error: {}", rv.unwrap_err());
                 self.activate_new_method();
+            }
+        }
+    }
+
+    fn transfer(&self, count: usize, from_index: isize, from: OOP, to_index: isize, to: OOP) {
+        unsafe {
+            let from_addr = self.om.addr_of_oop(from);
+            let to_addr = self.om.addr_of_oop(to);
+            ptr::copy(
+                from_addr.offset(from_index) as *const OOP,
+                to_addr.offset(to_index) as *mut OOP,
+                count,
+            );
+
+            for i in 0..count {
+                *from_addr.offset(from_index + i as isize) = NIL_PTR;
             }
         }
     }
@@ -495,12 +526,15 @@ impl<'a> Interpreter<'a> {
         abs_new_ctx.FMETHOD_BLOCK_ARGC = self.new_method;
 
         unsafe {
-            // transfer(argCount + 1, sp - (WORD*)ac - argCount,
-            //          activeContext, RECEIVER, newCtx);
-            ptr::copy(
-                self.om.addr_of_oop(self.active_context) as *const u16, // .offset(sp - ...)
-                self.om.addr_of_oop(new_ctx) as *mut u16,               // .offset(RECEIVER)
+            let ac = self.om.addr_of_oop(self.active_context);
+            let from_offset = self.sp.offset_from(ac) - (self.arg_count as isize);
+
+            self.transfer(
                 self.arg_count + 1,
+                from_offset,
+                self.active_context,
+                RECEIVER,
+                new_ctx,
             );
         }
 
@@ -520,16 +554,20 @@ impl<'a> Interpreter<'a> {
             {
                 let arg_array = self.om.inst_ptrs(CLASS_ARRAY, self.arg_count);
                 let msg = self.om.inst_ptrs(CLASS_MSG, MSG_SIZE);
-                self.store_ptr(msg, MSG_SELECTOR, self.msg_selector);
+                let msg_selector = self.msg_selector;
+                self.store_ptr(msg, MSG_SELECTOR, selector);
                 self.store_ptr(msg, MSG_ARGS, arg_array);
 
                 unsafe {
-                    // transfer(self.arg_count, sp - (WORD *)ac - (self.arg_count - 1),
-                    //             activeContext, 0, arg_array);
-                    ptr::copy(
-                        self.om.addr_of_oop(self.active_context) as *const u16,
-                        self.om.addr_of_oop(arg_array) as *mut u16,
+                    let ac = self.om.addr_of_oop(self.active_context);
+                    let from_offset = self.sp.offset_from(ac) - (self.arg_count as isize) - 1;
+
+                    self.transfer(
                         self.arg_count,
+                        from_offset,
+                        self.active_context,
+                        0,
+                        arg_array,
                     );
                 }
 
@@ -540,7 +578,7 @@ impl<'a> Interpreter<'a> {
 
             method = self.lookup_method_in_class_(cls, DOES_NOT_UNDERSTAND);
             if method == NIL_PTR {
-                panic!("does not understand not found?")
+                panic!("#doesNotUnderstand: not found?")
             }
         }
 

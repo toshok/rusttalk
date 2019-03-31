@@ -1,3 +1,5 @@
+#![feature(ptr_offset_from)]
+
 mod array_store_prim;
 mod char_scan_prim;
 mod context;
@@ -21,6 +23,9 @@ fn main() {
 
     let mut om = om::OM::new();
     let _image = snapshot::load("st80.image", &mut om);
+
+    // om.dump_ot();
+
     let mut interp = interp::Interpreter::new(&mut om);
     interp.startup();
 }

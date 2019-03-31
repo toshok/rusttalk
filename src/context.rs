@@ -10,7 +10,17 @@ pub struct Context {
     pub FTEMP_FRAME: [OOP; 32],
 }
 
+pub const SENDER: isize = 0;
+pub const INSTR_PTR: isize = 1;
+pub const STACK_PTR: isize = 2;
+pub const METHOD: isize = 3;
+pub const RECEIVER: isize = 5;
 pub const TEMP_FR_START: isize = 6;
+
+pub const CALLER: isize = 0;
+pub const BLOCK_ARGC: isize = 3;
+pub const INIT_IP: isize = 4;
+pub const HOME: isize = 5;
 
 impl Context {
     pub fn is_block_ctx(&self) -> bool {
