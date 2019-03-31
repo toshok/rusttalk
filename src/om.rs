@@ -158,39 +158,12 @@ impl OM {
         (self.get_rest(oop) & REST_FREE) != 0
     }
 
-    fn set_free(&mut self, oop: OOP, flag: bool) {
-        let rest = self.get_rest(oop);
-        if flag {
-            self.set_rest(oop, rest | REST_FREE)
-        } else {
-            self.set_rest(oop, rest & !REST_FREE);
-        }
-    }
-
     pub fn is_ptrs(&self, oop: OOP) -> bool {
         (self.get_rest(oop) & REST_PTRS) != 0
     }
 
-    fn set_ptrs(&mut self, oop: OOP, flag: bool) {
-        let rest = self.get_rest(oop);
-        if flag {
-            self.set_rest(oop, rest | REST_PTRS)
-        } else {
-            self.set_rest(oop, rest & !REST_PTRS);
-        }
-    }
-
     pub fn is_bitmap(&self, oop: OOP) -> bool {
         (self.get_rest(oop) & REST_BITMAP) != 0
-    }
-
-    fn set_bitmap(&mut self, oop: OOP, flag: bool) {
-        let rest = self.get_rest(oop);
-        if flag {
-            self.set_rest(oop, rest | REST_BITMAP)
-        } else {
-            self.set_rest(oop, rest & !REST_BITMAP);
-        }
     }
 
     pub fn len(&self, oop: OOP) -> usize {
@@ -283,8 +256,8 @@ impl OM {
 
         let free_space = OM_SIZE - object_space_length;
         self.set_loc(fcp, Loc::Address { addr: loc });
-        self.set_free(fcp, false);
-        self.set_ptrs(fcp, false);
+        let rest = self.get_rest(fcp);
+        self.set_rest(fcp, rest & !(REST_FREE | REST_PTRS));
         self.set_size(fcp, free_space / mem::size_of::<OOP>());
         self.set_class(fcp, NON_PTR);
     }
@@ -329,8 +302,8 @@ impl OM {
     fn deallocate(&mut self, oop: OOP) {
         if self.is_bitmap(oop) {
             // TODO(toshok) some additional freeing here. not sure how we're supposed to free "native" bitmaps?
-            self.set_free(oop, true);
-            self.set_bitmap(oop, false);
+            let rest = self.get_rest(oop);
+            self.set_rest(oop, (rest | REST_FREE) & !REST_BITMAP);
             self.free_list_prepend(oop);
         } else {
             let mut wsize = to_word_size(self.get_size(oop));
@@ -467,9 +440,9 @@ impl OM {
         self.free_ptr = self.get_free_list_next(oop);
 
         self.set_count(oop, 0);
-        self.set_free(oop, false);
-        self.set_ptrs(oop, false);
-        self.set_bitmap(oop, false);
+
+        let rest = self.get_rest(oop);
+        self.set_rest(oop, rest & !(REST_FREE | REST_PTRS | REST_BITMAP));
         self.set_size(oop, nbytes);
 
         self.set_loc(oop, Loc::Address { addr: loc });
