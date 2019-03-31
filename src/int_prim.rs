@@ -19,7 +19,7 @@ fn si_logical_op(interp: &mut Interpreter, op: fn(i32, i32) -> bool) -> PrimResu
     }
 
     let left_ptr = interp.pop();
-    if !om::is_int(right_ptr) {
+    if !om::is_int(left_ptr) {
         interp.push(left_ptr);
         interp.push(right_ptr);
         return Err("lhs not an int");
